@@ -71,7 +71,8 @@ with DAG("active_limit", schedule="@daily", max_active_runs=1) as dag:
     )
     store = SQLiteStateStore(f"sqlite:///{tmp_path / 'easyflow.db'}")
     dag = load_dag_from_file(dag_file, "active_limit")
-    PersistentDagRunner(store, log_root=tmp_path / "logs").create_manual_run(
+    runner = PersistentDagRunner(store, log_root=tmp_path / "logs")
+    runner.create_manual_run(
         dag,
         file_path=dag_file,
         logical_date=__import__("datetime").datetime.fromisoformat(
@@ -80,15 +81,16 @@ with DAG("active_limit", schedule="@daily", max_active_runs=1) as dag:
         run_id="manual__still_queued",
     )
 
-    created = run_scheduler_once(
-        dag_id="active_limit",
-        file_path=dag_file,
-        store=store,
-        now=__import__("datetime").datetime.fromisoformat("2026-07-08T12:00:00+00:00"),
-        log_root=tmp_path / "logs",
-    )
+    with runner._run_lock("active_limit", "manual__still_queued"):
+        created = run_scheduler_once(
+            dag_id="active_limit",
+            file_path=dag_file,
+            store=store,
+            now=__import__("datetime").datetime.fromisoformat("2026-07-08T12:00:00+00:00"),
+            log_root=tmp_path / "logs",
+        )
 
-    assert created == []
+    assert [(run.run_id, run.state.value) for run in created] == [("manual__still_queued", "queued")]
     assert store.count_dag_runs(dag_id="active_limit", run_type="scheduled") == 0
 
 

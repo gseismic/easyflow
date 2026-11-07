@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from croniter import CroniterError, croniter
 
@@ -15,57 +15,84 @@ def validate_cron(expression: str) -> None:
 
 
 def cron_next_after(expression: str, value: datetime) -> datetime:
-    validate_cron(expression)
-    candidate = _floor_minute(value) + timedelta(minutes=1)
-    return _next_at_or_after_validated(expression, candidate)
+    return _search(expression, value, forward=True, inclusive=False)
 
 
 def cron_next_at_or_after(expression: str, value: datetime) -> datetime:
-    validate_cron(expression)
-    candidate = _floor_minute(value)
-    if candidate < value:
-        candidate += timedelta(minutes=1)
-    return _next_at_or_after_validated(expression, candidate)
+    return _search(expression, value, forward=True, inclusive=True)
 
 
 def cron_previous_before(expression: str, value: datetime) -> datetime:
-    validate_cron(expression)
-    candidate = _floor_minute(value)
-    if candidate >= value:
-        candidate -= timedelta(minutes=1)
-    return _previous_at_or_before_validated(expression, candidate)
+    return _search(expression, value, forward=False, inclusive=False)
 
 
 def cron_previous_at_or_before(expression: str, value: datetime) -> datetime:
-    validate_cron(expression)
-    return _previous_at_or_before_validated(expression, _floor_minute(value))
+    return _search(expression, value, forward=False, inclusive=True)
 
 
 def is_cron_schedule(schedule: object) -> bool:
     return isinstance(schedule, str) and not schedule.startswith("@")
 
 
-def _next_at_or_after_validated(expression: str, candidate: datetime) -> datetime:
-    if _matches(expression, candidate):
-        return candidate
-    try:
-        return croniter(expression, candidate, day_or=True).get_next(datetime)
-    except CroniterError as exc:
-        raise ValueError(f"cron schedule {expression!r} 找不到下一次运行时间。") from exc
-
-
-def _previous_at_or_before_validated(expression: str, candidate: datetime) -> datetime:
-    if _matches(expression, candidate):
-        return candidate
-    try:
-        return croniter(expression, candidate, day_or=True).get_prev(datetime)
-    except CroniterError as exc:
-        raise ValueError(f"cron schedule {expression!r} 找不到上一次运行时间。") from exc
-
-
-def _matches(expression: str, value: datetime) -> bool:
-    return bool(croniter.match(expression, _floor_minute(value), day_or=True))
-
-
-def _floor_minute(value: datetime) -> datetime:
-    return value.replace(second=0, microsecond=0)
+def _search(
+    expression: str, value: datetime, *, forward: bool, inclusive: bool
+) -> datetime:
+    validate_cron(expression)
+    if value.tzinfo is None:
+        raise ValueError("cron 时间必须带时区。")
+    zone = value.tzinfo
+    instant = value.astimezone(timezone.utc)
+    wall = value.replace(tzinfo=None, second=0, microsecond=0)
+    # 回拨附近同一个墙上时间有两个真实时刻，需搜索相邻的墙上时间。
+    nearby_transition = (instant - timedelta(days=1)).astimezone(zone).utcoffset() != (
+        instant + timedelta(days=1)
+    ).astimezone(zone).utcoffset()
+    direction = 1 if forward else -1
+    cursor = wall - timedelta(hours=4 * direction) if nearby_transition else wall
+    if croniter.match(expression, cursor, day_or=True):
+        candidate_wall = cursor
+    else:
+        try:
+            iterator = croniter(expression, cursor, day_or=True)
+            candidate_wall = (
+                iterator.get_next(datetime) if forward else iterator.get_prev(datetime)
+            )
+        except CroniterError as exc:
+            raise ValueError(f"cron schedule {expression!r} 找不到运行时间。") from exc
+    best: datetime | None = None
+    while True:
+        for fold in (0, 1):
+            candidate = candidate_wall.replace(tzinfo=zone, fold=fold)
+            actual = candidate.astimezone(timezone.utc)
+            # 往返转换可以排除春季跳时产生的不存在的本地时间。
+            if actual.astimezone(zone).replace(tzinfo=None) != candidate_wall:
+                continue
+            acceptable = (
+                (actual >= instant if inclusive else actual > instant)
+                if forward
+                else (actual <= instant if inclusive else actual < instant)
+            )
+            if acceptable and (
+                best is None
+                or (
+                    actual < best.astimezone(timezone.utc)
+                    if forward
+                    else actual > best.astimezone(timezone.utc)
+                )
+            ):
+                best = candidate
+        if best is not None:
+            if (
+                not nearby_transition
+                or direction
+                * (candidate_wall - best.replace(tzinfo=None)).total_seconds()
+                >= 4 * 3600
+            ):
+                return best
+        try:
+            iterator = croniter(expression, candidate_wall, day_or=True)
+            candidate_wall = (
+                iterator.get_next(datetime) if forward else iterator.get_prev(datetime)
+            )
+        except CroniterError as exc:
+            raise ValueError(f"cron schedule {expression!r} 找不到运行时间。") from exc

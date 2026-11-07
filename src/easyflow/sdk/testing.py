@@ -11,7 +11,11 @@ from jinja2 import Environment, StrictUndefined, TemplateError
 
 from easyflow.sdk.context import set_current_context
 from easyflow.sdk.dag import DAG, DagTestResult
-from easyflow.sdk.exceptions import TemplateRenderError, XComSerializationError, XComValueTooLargeError
+from easyflow.sdk.exceptions import (
+    TemplateRenderError,
+    XComSerializationError,
+    XComValueTooLargeError,
+)
 from easyflow.sdk.states import TaskInstanceState, TriggerRule
 from easyflow.sdk.xcom import RETURN_VALUE_KEY, XComArg
 
@@ -34,17 +38,21 @@ class InMemoryXComStore:
             raise XComValueTooLargeError(
                 f"XCom value for task {task_id!r} key {key!r} exceeds {MAX_XCOM_BYTES} bytes."
             )
-        self.values[(task_id, key)] = value
+        self.values[(task_id, key)] = encoded
 
     def pull(self, task_id: str, key: str = RETURN_VALUE_KEY) -> Any:
-        return self.values[(task_id, key)]
+        return json.loads(self.values[(task_id, key)])
 
 
 def _json_validate(value: Any) -> bytes:
     try:
-        return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
     except (TypeError, ValueError) as exc:
-        raise XComSerializationError(f"XCom value is not JSON serializable: {exc}") from exc
+        raise XComSerializationError(
+            f"XCom value is not JSON serializable: {exc}"
+        ) from exc
 
 
 def resolve_xcom_args(value: Any, xcom_store: InMemoryXComStore) -> Any:
@@ -56,6 +64,10 @@ def resolve_xcom_args(value: Any, xcom_store: InMemoryXComStore) -> Any:
         return [resolve_xcom_args(item, xcom_store) for item in value]
     if isinstance(value, tuple):
         return tuple(resolve_xcom_args(item, xcom_store) for item in value)
+    if isinstance(value, set):
+        return {resolve_xcom_args(item, xcom_store) for item in value}
+    if isinstance(value, frozenset):
+        return frozenset(resolve_xcom_args(item, xcom_store) for item in value)
     return value
 
 
@@ -105,17 +117,28 @@ def run_dag_in_process(
 
         if not progressed:
             waiting = [
-                task_id for task_id, state in task_states.items() if state not in TERMINAL_STATES
+                task_id
+                for task_id, state in task_states.items()
+                if state not in TERMINAL_STATES
             ]
-            raise RuntimeError(f"DAG execution made no progress. Waiting tasks: {waiting}")
+            raise RuntimeError(
+                f"DAG execution made no progress. Waiting tasks: {waiting}"
+            )
 
     return DagTestResult(
         dag_id=dag.dag_id,
         run_id=run_id,
         logical_date=logical_date,
-        task_states={task_id: state for task_id, state in task_states.items() if state is not None},
+        task_states={
+            task_id: state
+            for task_id, state in task_states.items()
+            if state is not None
+        },
         task_results=task_results,
         try_numbers=try_numbers,
+        leaf_task_ids=frozenset(
+            task.task_id for task in dag.tasks if not task.downstream_task_ids
+        ),
     )
 
 
@@ -140,11 +163,17 @@ def _dependency_decision(task: Any, states: dict[str, TaskInstanceState | None])
     if len(terminal) != len(upstream_states):
         return "wait"
     if rule == TriggerRule.ALL_SUCCESS:
-        return "run" if all(state == TaskInstanceState.SUCCESS for state in upstream_states) else _blocked_decision(has_failed)
+        return (
+            "run"
+            if all(state == TaskInstanceState.SUCCESS for state in upstream_states)
+            else _blocked_decision(has_failed)
+        )
     if rule == TriggerRule.ALL_DONE:
         return "run"
     if rule == TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS:
-        return "run" if not has_failed and has_success else _blocked_decision(has_failed)
+        return (
+            "run" if not has_failed and has_success else _blocked_decision(has_failed)
+        )
     if rule == TriggerRule.ONE_SUCCESS:
         return _blocked_decision(has_failed)
     if rule == TriggerRule.ONE_FAILED:

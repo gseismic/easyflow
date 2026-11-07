@@ -1,19 +1,35 @@
 from __future__ import annotations
 
+import base64
 import copy
+import errno
+import hashlib
 import io
 import os
 import threading
 import time
-from contextlib import redirect_stderr, redirect_stdout
+import traceback
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
+    import msvcrt
+
 from easyflow._internal.dag_parser import definition_hash_for_dag
 from easyflow._internal.schedules import DataInterval
-from easyflow._internal.state_store import SQLiteStateStore
+from easyflow._internal.state_store import (
+    SchedulerFence,
+    SQLiteStateStore,
+    run_timezone,
+    task_retry_settings,
+)
 from easyflow.sdk.context import set_current_context
 from easyflow.sdk.dag import DAG
 from easyflow.sdk.states import DagRunState, TaskInstanceState
@@ -57,9 +73,7 @@ class PersistentXComStore:
         }
 
     def clear_task(self, task_id: str) -> None:
-        for key in [
-            key for key in self.pending if key[0] == task_id
-        ]:
+        for key in [key for key in self.pending if key[0] == task_id]:
             self.pending.pop(key, None)
 
 
@@ -70,11 +84,15 @@ class PersistentDagRunner:
         *,
         log_root: str | Path = "./.easyflow/logs",
         task_lease_seconds: int = 30,
+        should_continue: Callable[[], bool] | None = None,
+        scheduler_fence: SchedulerFence | None = None,
     ) -> None:
         self.store = store
         self.log_root = Path(log_root)
         self.task_lease_seconds = task_lease_seconds
         self.runner_id = f"runner-{os.getpid()}"
+        self.should_continue = should_continue or (lambda: True)
+        self.scheduler_fence = scheduler_fence
 
     def create_manual_run(
         self,
@@ -87,7 +105,9 @@ class PersistentDagRunner:
     ) -> str:
         if logical_date.tzinfo is None:
             raise ValueError("logical_date 必须带时区。")
-        run_id = run_id or f"manual__{logical_date.astimezone(timezone.utc).isoformat()}"
+        run_id = (
+            run_id or f"manual__{logical_date.astimezone(timezone.utc).isoformat()}"
+        )
         interval_start, interval_end = _data_interval(dag, logical_date)
         return self.create_run(
             dag,
@@ -105,7 +125,9 @@ class PersistentDagRunner:
         file_path: str | Path | None,
         interval: DataInterval,
     ) -> str:
-        run_id = f"scheduled__{interval.logical_date.astimezone(timezone.utc).isoformat()}"
+        run_id = (
+            f"scheduled__{interval.logical_date.astimezone(timezone.utc).isoformat()}"
+        )
         return self.create_run(
             dag,
             file_path=file_path,
@@ -122,6 +144,8 @@ class PersistentDagRunner:
         file_path: str | Path | None,
         interval: DataInterval,
         backfill_id: str,
+        max_active_runs: int | None = None,
+        reprocessing_behavior: str | None = None,
     ) -> str:
         safe_logical_date = interval.logical_date.astimezone(timezone.utc).isoformat()
         run_id = f"backfill__{backfill_id}__{safe_logical_date}"
@@ -133,6 +157,8 @@ class PersistentDagRunner:
             interval=interval,
             conf={},
             backfill_id=backfill_id,
+            max_active_runs=max_active_runs,
+            reprocessing_behavior=reprocessing_behavior,
         )
 
     def create_run(
@@ -145,7 +171,14 @@ class PersistentDagRunner:
         interval: DataInterval,
         conf: dict[str, Any] | None = None,
         backfill_id: str | None = None,
+        max_active_runs: int | None = None,
+        reprocessing_behavior: str | None = None,
     ) -> str:
+        loaded_source = getattr(dag, "_easyflow_source_sha256", None)
+        if file_path is not None and loaded_source is not None:
+            actual_source = hashlib.sha256(Path(file_path).read_bytes()).hexdigest()
+            if actual_source != loaded_source:
+                raise RuntimeError("创建 DagRun 前 DAG 源码已改变，请重新加载。")
         self.store.create_dag_run(
             dag=dag,
             run_id=run_id,
@@ -153,14 +186,85 @@ class PersistentDagRunner:
             logical_date=interval.logical_date,
             data_interval_start=interval.data_interval_start,
             data_interval_end=interval.data_interval_end,
-            definition_hash=definition_hash_for_dag(dag, file_path),
+            definition_hash=definition_hash_for_dag(
+                dag, file_path, source_sha256=loaded_source
+            ),
             file_path=str(file_path) if file_path is not None else None,
             conf=conf or {},
             backfill_id=backfill_id,
+            max_active_runs=max_active_runs,
+            only_once=run_type == "scheduled" and dag.schedule == "@once",
+            scheduler_fence=self.scheduler_fence,
+            reprocessing_behavior=reprocessing_behavior,
         )
         return run_id
 
     def run_existing(
+        self,
+        dag: DAG,
+        *,
+        run_id: str,
+        file_path: str | Path | None = None,
+        executor: str = "sequential",
+        parallelism: int = 1,
+    ) -> PersistentRunResult:
+        with self._run_lock(dag.dag_id, run_id) as acquired:
+            if not acquired:
+                record = self.store.get_dag_run(dag.dag_id, run_id)
+                if record is None:
+                    raise ValueError(f"DagRun 不存在: {dag.dag_id}/{run_id}")
+                return PersistentRunResult(
+                    dag.dag_id,
+                    run_id,
+                    DagRunState(record.state),
+                    self.store.list_task_states(dag.dag_id, run_id),
+                )
+            return self._run_existing_locked(
+                dag,
+                run_id=run_id,
+                file_path=file_path,
+                executor=executor,
+                parallelism=parallelism,
+            )
+
+    @contextmanager
+    def _run_lock(self, dag_id: str, run_id: str) -> Iterator[bool]:
+        lock_root = self.store.path.resolve().parent / ".easyflow-run-locks"
+        lock_root.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(
+            f"{self.store.path.resolve()}\0{dag_id}\0{run_id}".encode()
+        ).hexdigest()
+        with (lock_root / digest).open("a+b") as handle:
+            if fcntl is None:  # pragma: no cover - Windows
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b"\0")
+                    handle.flush()
+                handle.seek(0)
+            try:
+                if fcntl is None:  # pragma: no cover - Windows
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                if exc.errno not in {
+                    errno.EACCES,
+                    errno.EAGAIN,
+                    errno.EDEADLK,
+                } and getattr(exc, "winerror", None) not in {33, 36}:
+                    raise
+                yield False
+                return
+            try:
+                yield True
+            finally:
+                if fcntl is None:  # pragma: no cover - Windows
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def _run_existing_locked(
         self,
         dag: DAG,
         *,
@@ -181,12 +285,23 @@ class PersistentDagRunner:
             )
         if file_path is not None:
             current_hash = definition_hash_for_dag(dag, file_path)
-            if record.definition_hash is not None and record.definition_hash != current_hash:
+            loaded_source = getattr(dag, "_easyflow_source_sha256", None)
+            loaded_hash = definition_hash_for_dag(
+                dag, file_path, source_sha256=loaded_source
+            )
+            if record.definition_hash is not None and (
+                record.definition_hash != current_hash
+                or record.definition_hash != loaded_hash
+            ):
                 self.store.fail_dag_run_definition_changed(
                     dag_id=dag.dag_id,
                     run_id=run_id,
                     expected_hash=record.definition_hash,
-                    actual_hash=current_hash,
+                    actual_hash=(
+                        current_hash
+                        if current_hash != record.definition_hash
+                        else loaded_hash
+                    ),
                 )
                 return PersistentRunResult(
                     dag_id=dag.dag_id,
@@ -194,7 +309,8 @@ class PersistentDagRunner:
                     state=DagRunState.FAILED,
                     task_states=self.store.list_task_states(dag.dag_id, run_id),
                 )
-        logical_date = datetime.fromisoformat(record.logical_date)
+        zone = run_timezone(record.logical_timezone)
+        logical_date = datetime.fromisoformat(record.logical_date).astimezone(zone)
         conf = {}
         if record.conf_json:
             import json
@@ -202,7 +318,9 @@ class PersistentDagRunner:
             conf = json.loads(record.conf_json)
         if executor == "local":
             if file_path is None:
-                raise ValueError("LocalExecutor 需要 file_path 以便子进程重新加载 DAG。")
+                raise ValueError(
+                    "LocalExecutor 需要 file_path 以便子进程重新加载 DAG。"
+                )
             return self._run_existing_local(
                 dag=dag,
                 run_id=run_id,
@@ -223,10 +341,18 @@ class PersistentDagRunner:
             task_states = self.store.list_task_states(dag.dag_id, run_id)
             if all(state in TERMINAL_STATES for state in task_states.values()):
                 break
+            if not self.should_continue():
+                return PersistentRunResult(
+                    dag.dag_id, run_id, DagRunState.RUNNING, task_states
+                )
             progressed = False
             for task in ordered_tasks:
                 current_state = task_states[task.task_id]
                 if current_state in TERMINAL_STATES:
+                    continue
+                if not self.should_continue():
+                    break
+                if current_state == TaskInstanceState.RUNNING:
                     continue
                 past_decision = self._depends_on_past_decision(
                     dag_id=dag.dag_id,
@@ -273,19 +399,16 @@ class PersistentDagRunner:
                 )
                 progressed = True
             if not progressed:
-                self.store.set_dag_run_state(dag.dag_id, run_id, DagRunState.FAILED)
-                raise RuntimeError(f"DagRun {dag.dag_id}/{run_id} 无法继续推进。")
+                return PersistentRunResult(
+                    dag.dag_id,
+                    run_id,
+                    DagRunState.RUNNING,
+                    self.store.list_task_states(dag.dag_id, run_id),
+                )
 
         final_states = self.store.list_task_states(dag.dag_id, run_id)
-        final_state = (
-            DagRunState.FAILED
-            if any(
-                state in {TaskInstanceState.FAILED, TaskInstanceState.UPSTREAM_FAILED}
-                for state in final_states.values()
-            )
-            else DagRunState.SUCCESS
-        )
-        self.store.set_dag_run_state(dag.dag_id, run_id, final_state)
+        final_state = self.store.finish_dag_run(dag, run_id)
+        final_states = self.store.list_task_states(dag.dag_id, run_id)
         return PersistentRunResult(dag.dag_id, run_id, final_state, final_states)
 
     def _run_existing_local(
@@ -317,17 +440,17 @@ class PersistentDagRunner:
             run_type=record.run_type,
             logical_date=logical_date,
             conf=conf,
+            should_continue=self.should_continue,
+            scheduler_fence=self.scheduler_fence,
         )
         final_states = executor.run()
-        final_state = (
-            DagRunState.FAILED
-            if any(
-                state in {TaskInstanceState.FAILED, TaskInstanceState.UPSTREAM_FAILED}
-                for state in final_states.values()
+        record_now = self.store.get_dag_run(dag.dag_id, run_id)
+        if record_now is not None and record_now.state == DagRunState.FAILED.value:
+            return PersistentRunResult(
+                dag.dag_id, run_id, DagRunState.FAILED, final_states
             )
-            else DagRunState.SUCCESS
-        )
-        self.store.set_dag_run_state(dag.dag_id, run_id, final_state)
+        final_state = self.store.finish_dag_run(dag, run_id)
+        final_states = self.store.list_task_states(dag.dag_id, run_id)
         return PersistentRunResult(dag.dag_id, run_id, final_state, final_states)
 
     def _depends_on_past_decision(
@@ -353,7 +476,10 @@ class PersistentDagRunner:
             return "ready"
         if previous.state in {TaskInstanceState.SUCCESS, TaskInstanceState.SKIPPED}:
             return "ready"
-        if previous.state in {TaskInstanceState.FAILED, TaskInstanceState.UPSTREAM_FAILED}:
+        if previous.state in {
+            TaskInstanceState.FAILED,
+            TaskInstanceState.UPSTREAM_FAILED,
+        }:
             return "upstream_failed"
         return "wait"
 
@@ -368,16 +494,24 @@ class PersistentDagRunner:
         xcom_store: PersistentXComStore,
     ) -> None:
         retries = _resolve_retries(dag, task)
-        while True:
+        delay, factor, maximum = task_retry_settings(dag, task)
+        while self.should_continue():
             current_state = self.store.get_task_state(dag.dag_id, run_id, task.task_id)
             if current_state in TERMINAL_STATES:
                 return
+            retry_at = self.store.task_retry_at(dag.dag_id, run_id, task.task_id)
+            if retry_at is not None:
+                remaining = (retry_at - datetime.now(timezone.utc)).total_seconds()
+                if remaining > 0:
+                    time.sleep(min(remaining, 0.2))
+                    continue
             try_number = self.store.start_task_try(
                 dag.dag_id,
                 run_id,
                 task.task_id,
                 owner=self.runner_id,
                 lease_seconds=self.task_lease_seconds,
+                scheduler_fence=self.scheduler_fence,
             )
             if try_number is None:
                 return
@@ -410,7 +544,8 @@ class PersistentDagRunner:
                     log_path=log_path,
                 )
                 heartbeat.stop()
-                _push_result(task, result, xcom_store)
+                if task.do_xcom_push:
+                    _push_result(task, result, xcom_store)
                 self.store.commit_success(
                     dag_id=dag.dag_id,
                     run_id=run_id,
@@ -422,6 +557,9 @@ class PersistentDagRunner:
                 return
             except Exception as exc:
                 heartbeat.stop()
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                with log_path.open("a", encoding="utf-8") as log_file:
+                    log_file.write("".join(traceback.format_exception(exc)))
                 xcom_store.clear_task(task.task_id)
                 next_state = self.store.commit_failure(
                     dag_id=dag.dag_id,
@@ -430,6 +568,9 @@ class PersistentDagRunner:
                     try_number=try_number,
                     error=exc,
                     retries=retries,
+                    retry_delay=delay,
+                    retry_factor=factor,
+                    max_retry_delay=maximum,
                 )
                 if next_state == TaskInstanceState.FAILED:
                     return
@@ -446,7 +587,14 @@ class PersistentDagRunner:
         log_path: Path,
     ) -> Any:
         execution_task = copy.copy(task)
-        interval_start, interval_end = _data_interval(dag, logical_date)
+        record = self.store.get_dag_run(dag.dag_id, run_id)
+        if record is None:
+            raise ValueError(f"DagRun 不存在: {dag.dag_id}/{run_id}")
+        zone = run_timezone(record.logical_timezone)
+        interval_start = datetime.fromisoformat(record.data_interval_start).astimezone(
+            zone
+        )
+        interval_end = datetime.fromisoformat(record.data_interval_end).astimezone(zone)
         context = _build_context(
             dag=dag,
             task=execution_task,
@@ -465,15 +613,14 @@ class PersistentDagRunner:
                     with set_current_context(context):
                         return execution_task.execute(context)
 
-    def _log_path(self, dag_id: str, run_id: str, task_id: str, try_number: int) -> Path:
-        safe_run_id = run_id.replace("/", "_").replace(":", "_")
+    def _log_path(
+        self, dag_id: str, run_id: str, task_id: str, try_number: int
+    ) -> Path:
+        safe_run_id = "run_" + base64.urlsafe_b64encode(run_id.encode("utf-8")).decode(
+            "ascii"
+        ).rstrip("=")
         return (
-            self.log_root
-            / dag_id
-            / safe_run_id
-            / task_id
-            / "-1"
-            / f"{try_number}.log"
+            self.log_root / dag_id / safe_run_id / task_id / "-1" / f"{try_number}.log"
         )
 
 

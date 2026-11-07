@@ -32,10 +32,20 @@ class DagTestResult:
     task_states: dict[str, TaskInstanceState]
     task_results: dict[str, Any]
     try_numbers: dict[str, int]
+    leaf_task_ids: frozenset[str] | None = None
 
     @property
     def success(self) -> bool:
-        return all(state == TaskInstanceState.SUCCESS for state in self.task_states.values())
+        leaves = (
+            self.leaf_task_ids
+            if self.leaf_task_ids is not None
+            else self.task_states.keys()
+        )
+        return all(
+            self.task_states[task_id]
+            in {TaskInstanceState.SUCCESS, TaskInstanceState.SKIPPED}
+            for task_id in leaves
+        )
 
 
 class DAG:
@@ -87,8 +97,16 @@ class DAG:
             if value is not None and value.tzinfo is None:
                 raise DagDefinitionError(f"{field_name} 必须是带时区 datetime。")
         if self.start_date is not None and self.end_date is not None:
-            if self.start_date >= self.end_date:
+            if self.start_date.astimezone(timezone.utc) >= self.end_date.astimezone(
+                timezone.utc
+            ):
                 raise DagDefinitionError("start_date 必须小于 end_date。")
+        for name, value in (
+            ("max_active_runs", self.max_active_runs),
+            ("max_active_tasks", self.max_active_tasks),
+        ):
+            if value is not None and value < 1:
+                raise DagDefinitionError(f"{name} 必须大于 0。")
 
     def __enter__(self) -> "DAG":
         _DAG_STACK.append(self)
@@ -119,7 +137,9 @@ class DAG:
     def validate(self) -> None:
         for task in self.tasks:
             if task.dag is not self:
-                raise TaskBindingError(f"Task {task.task_id!r} 未绑定到 DAG {self.dag_id!r}。")
+                raise TaskBindingError(
+                    f"Task {task.task_id!r} 未绑定到 DAG {self.dag_id!r}。"
+                )
             for upstream in task.upstream_task_ids:
                 if upstream not in self.task_dict:
                     raise TaskBindingError(
@@ -135,7 +155,9 @@ class DAG:
                 indegree[task.task_id] += 1
                 downstreams[upstream].add(task.task_id)
 
-        ready = deque(sorted(task_id for task_id, degree in indegree.items() if degree == 0))
+        ready = deque(
+            sorted(task_id for task_id, degree in indegree.items() if degree == 0)
+        )
         ordered_ids: list[str] = []
         while ready:
             task_id = ready.popleft()
@@ -164,14 +186,18 @@ class DAG:
         use_executor: bool = False,
     ) -> DagTestResult:
         if use_executor:
-            raise NotImplementedError("dag.test(use_executor=True) 将在后续执行器里程碑实现。")
+            raise NotImplementedError(
+                "dag.test(use_executor=True) 将在后续执行器里程碑实现。"
+            )
         from easyflow.sdk.testing import run_dag_in_process
 
         logical_date = logical_date or datetime.now(timezone.utc)
         if logical_date.tzinfo is None:
             raise DagDefinitionError("logical_date 必须是带时区 datetime。")
         self.validate()
-        return run_dag_in_process(self, logical_date=logical_date, run_conf=run_conf or {})
+        return run_dag_in_process(
+            self, logical_date=logical_date, run_conf=run_conf or {}
+        )
 
 
 def dag(

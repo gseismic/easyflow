@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from datetime import timedelta
 from typing import Any, ClassVar
 
@@ -58,10 +58,13 @@ class BaseOperator:
         self.upstream_task_ids: set[str] = set()
         self.downstream_task_ids: set[str] = set()
 
-        if dag is None:
-            from easyflow.sdk.dag import current_dag
+        from easyflow.sdk.dag import current_dag
 
-            dag = current_dag()
+        context_dag = current_dag()
+        if dag is not None and context_dag is not None and dag is not context_dag:
+            raise ValueError("显式 DAG 与当前 DAG context 不一致。")
+        if dag is None:
+            dag = context_dag
         if dag is not None:
             dag.add_task(self)
 

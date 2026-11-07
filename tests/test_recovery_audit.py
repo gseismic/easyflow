@@ -27,7 +27,7 @@ with DAG("lease_job", schedule="@daily") as dag:
     )
     store = SQLiteStateStore(f"sqlite:///{tmp_path / 'easyflow.db'}")
     now = datetime(2026, 7, 8, 12, tzinfo=timezone.utc)
-    assert store.acquire_scheduler_lease(owner="other", lease_seconds=30, now=now).acquired
+    assert store.acquire_scheduler_lease(owner="other", lease_seconds=30).acquired
     with pytest.raises(RuntimeError, match="scheduler lease"):
         run_scheduler_once(
             dag_id="lease_job",
@@ -38,6 +38,9 @@ with DAG("lease_job", schedule="@daily") as dag:
             log_root=tmp_path / "logs",
         )
 
+    store.release_scheduler_lease(owner="other")
+    assert store.acquire_scheduler_lease(owner="other", lease_seconds=30,
+                                         now=datetime.now(timezone.utc) - timedelta(seconds=31)).acquired
     result = run_scheduler_once(
         dag_id="lease_job",
         file_path=dag_file,

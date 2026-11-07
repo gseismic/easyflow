@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from typing import Any
 
@@ -21,18 +22,26 @@ class BashOperator(BaseOperator):
     ) -> None:
         super().__init__(**kwargs)
         self.bash_command = bash_command
-        self.env = dict(env or {})
+        self.env = None if env is None else dict(env)
         self.append_env = append_env
         self.cwd = cwd
 
     def execute(self, context: dict[str, Any]) -> str:
-        env = os.environ.copy() if self.append_env else {}
-        env.update(self.env)
+        env = (
+            os.environ.copy() if self.append_env else (None if self.env is None else {})
+        )
+        if self.env is not None:
+            assert env is not None
+            env.update(self.env)
+        bash = (
+            "/bin/bash"
+            if os.path.isfile("/bin/bash")
+            else shutil.which("bash") or "bash"
+        )
         completed = subprocess.run(
-            self.bash_command,
-            shell=True,
+            [bash, "-c", self.bash_command],
             cwd=self.cwd,
-            env=env or None,
+            env=env,
             capture_output=True,
             text=True,
             check=False,

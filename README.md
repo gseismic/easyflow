@@ -77,6 +77,18 @@ PYTHONPATH=src:. python -m easyflow.cli backfill create \
   --end-date 2026-07-05
 ```
 
+调度使用 DAG `start_date` 的时区；未设置时使用 UTC。手动传入的 `logical_date` 保留其
+业务时区，持久化任务使用运行记录中的数据区间。`timedelta` 调度以 `start_date` 为锚点；
+未设置时以 UTC 的 Unix epoch 为锚点。调度和回补只选择符合 DAG 开始、结束时间的 logical date。
+
+`max_active_runs` 约束同一 DAG 的所有活跃运行；回补的 `--max-active-runs` 还约束该次回补
+自己的活跃运行。容量不足时回补返回非零退出码并报告未完成区间，已有运行可由 scheduler
+继续；容量释放后可用新的 backfill ID 重试剩余日期。默认的 `none` 策略会跳过任何已有运行的
+日期；要重新处理失败日期，使用 `--reprocessing-behavior failed`。
+
+scheduler 会优先恢复已有的 queued/running 运行；任务重试遵守持久化的延迟和退避时间。
+同步执行会等待任务及其重试，外部写入仍需由任务保证幂等。
+
 清理已完成任务并允许重跑：
 
 ```bash

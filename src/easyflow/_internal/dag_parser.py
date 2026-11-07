@@ -35,25 +35,39 @@ class DagDiscoveryResult:
 
 def load_dag_from_file(file_path: str | Path, dag_id: str) -> DAG:
     path = Path(file_path).resolve()
-    candidates = load_dags_from_file(path)
+    result = inspect_dags_from_file(path)
+    candidates = result.sources
     for source in candidates:
         if source.dag_id == dag_id:
             return source.dag
+    issue = next(
+        (item for item in result.issues if item.dag_id in (None, dag_id)), None
+    )
+    if issue is not None:
+        raise ValueError(f"文件 {path} DAG {dag_id!r} 解析失败：{issue.message}")
     available = ", ".join(source.dag_id for source in candidates) or "<none>"
     raise ValueError(f"文件 {path} 中找不到 DAG {dag_id!r}。可用 DAG: {available}")
 
 
 def load_dags_from_file(file_path: str | Path) -> list[DagSource]:
+    result = inspect_dags_from_file(file_path)
+    if result.issues and not result.sources:
+        first = result.issues[0]
+        dag_part = f" DAG {first.dag_id!r}" if first.dag_id else ""
+        raise ValueError(f"文件 {first.file_path}{dag_part} 解析失败：{first.message}")
+    return result.sources
+
+
+def inspect_dags_from_file(file_path: str | Path) -> DagDiscoveryResult:
     path = Path(file_path).resolve()
-    module = _load_module(path)
+    try:
+        module = _load_module(path)
+    except Exception as exc:
+        return DagDiscoveryResult([], [DagParseIssue(path, None, str(exc))])
     sources, issues = _sources_from_module(module, path)
     sources, duplicate_issues = _remove_duplicate_dag_ids(sources)
     issues.extend(duplicate_issues)
-    if issues:
-        first = issues[0]
-        dag_part = f" DAG {first.dag_id!r}" if first.dag_id else ""
-        raise ValueError(f"文件 {first.file_path}{dag_part} 解析失败：{first.message}")
-    return sources
+    return DagDiscoveryResult(sources, issues)
 
 
 def discover_dag_files(dags_folder: str | Path) -> list[Path]:
@@ -65,7 +79,9 @@ def discover_dag_files(dags_folder: str | Path) -> list[Path]:
     files = []
     for path in root.rglob("*.py"):
         relative_parts = path.relative_to(root).parts
-        if any(part.startswith(".") or part == "__pycache__" for part in relative_parts):
+        if any(
+            part.startswith(".") or part == "__pycache__" for part in relative_parts
+        ):
             continue
         files.append(path.resolve())
     return sorted(files)
@@ -94,12 +110,16 @@ def discover_dag_sources(
     sources, duplicate_issues = _remove_duplicate_dag_ids(sources)
     issues.extend(duplicate_issues)
     return DagDiscoveryResult(
-        sources=sorted(sources, key=lambda source: (source.dag_id, source.file_path.as_posix())),
+        sources=sorted(
+            sources, key=lambda source: (source.dag_id, source.file_path.as_posix())
+        ),
         issues=issues,
     )
 
 
-def definition_hash_for_dag(dag: DAG, file_path: str | Path | None = None) -> str:
+def definition_hash_for_dag(
+    dag: DAG, file_path: str | Path | None = None, *, source_sha256: str | None = None
+) -> str:
     payload: dict[str, Any] = {
         "dag_id": dag.dag_id,
         "schedule": str(dag.schedule),
@@ -117,7 +137,9 @@ def definition_hash_for_dag(dag: DAG, file_path: str | Path | None = None) -> st
     if file_path is not None:
         path = Path(file_path)
         if path.exists():
-            payload["source_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+            payload["source_sha256"] = (
+                source_sha256 or hashlib.sha256(path.read_bytes()).hexdigest()
+            )
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -131,7 +153,10 @@ def _load_module(path: Path) -> ModuleType:
     old_module = sys.modules.get(module_name)
     sys.modules[module_name] = module
     try:
-        spec.loader.exec_module(module)
+        # 直接编译当前源码，避免同秒且同大小的修改命中陈旧的 pyc。
+        source = path.read_bytes()
+        module.__easyflow_source_sha256__ = hashlib.sha256(source).hexdigest()
+        exec(compile(source, str(path), "exec"), module.__dict__)
     except Exception:
         if old_module is not None:
             sys.modules[module_name] = old_module
@@ -141,7 +166,9 @@ def _load_module(path: Path) -> ModuleType:
     return module
 
 
-def _sources_from_module(module: ModuleType, path: Path) -> tuple[list[DagSource], list[DagParseIssue]]:
+def _sources_from_module(
+    module: ModuleType, path: Path
+) -> tuple[list[DagSource], list[DagParseIssue]]:
     candidates = [value for value in vars(module).values() if isinstance(value, DAG)]
     sources: list[DagSource] = []
     issues: list[DagParseIssue] = []
@@ -156,6 +183,7 @@ def _sources_from_module(module: ModuleType, path: Path) -> tuple[list[DagSource
         except Exception as exc:  # noqa: BLE001 - 单个 DAG 无效不应阻塞同文件其他 DAG。
             issues.append(DagParseIssue(path, dag.dag_id, str(exc)))
             continue
+        dag._easyflow_source_sha256 = module.__easyflow_source_sha256__
         sources.append(DagSource(dag_id=dag.dag_id, file_path=path, dag=dag))
     return sources, issues
 

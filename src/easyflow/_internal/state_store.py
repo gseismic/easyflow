@@ -3,16 +3,45 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
 import traceback
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from easyflow.sdk.exceptions import StateConflictError, XComSerializationError, XComValueTooLargeError
+from easyflow.sdk.exceptions import (
+    StateConflictError,
+    XComSerializationError,
+    XComValueTooLargeError,
+)
 from easyflow.sdk.states import DagRunState, TaskInstanceState
 
 MAX_XCOM_BYTES = 1_048_576
+
+
+class DagRunCapacityError(StateConflictError):
+    pass
+
+
+class ScheduledRunExists(StateConflictError):
+    pass
+
+
+class SchedulerLeaseLost(RuntimeError):
+    pass
+
+
+class BackfillRunNotEligible(StateConflictError):
+    pass
+
+
+@dataclass(frozen=True)
+class SchedulerFence:
+    owner: str
+    started_at: datetime
+    started_monotonic: float
 
 
 SCHEMA = """
@@ -161,6 +190,30 @@ class SQLiteStateStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.path) as connection:
             connection.executescript(SCHEMA)
+            connection.execute("BEGIN IMMEDIATE")
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(dag_run)")
+            }
+            if "logical_timezone" not in columns:
+                connection.execute(
+                    "ALTER TABLE dag_run ADD COLUMN logical_timezone TEXT"
+                )
+            columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(dag_definition)")
+            }
+            if "max_active_runs" not in columns:
+                connection.execute(
+                    "ALTER TABLE dag_definition ADD COLUMN max_active_runs INTEGER NOT NULL DEFAULT 1"
+                )
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(task_instance)")
+            }
+            if "retry_base" not in columns:
+                connection.execute(
+                    "ALTER TABLE task_instance ADD COLUMN retry_base INTEGER NOT NULL DEFAULT 0"
+                )
+                _restore_retry_baselines(connection)
         return self.path
 
     def list_tables(self) -> list[str]:
@@ -183,30 +236,84 @@ class SQLiteStateStore:
         file_path: str | None,
         conf: dict[str, Any] | None = None,
         backfill_id: str | None = None,
+        max_active_runs: int | None = None,
+        only_once: bool = False,
+        scheduler_fence: SchedulerFence | None = None,
+        reprocessing_behavior: str | None = None,
     ) -> None:
         now = _utc_now()
         self.init_db()
         with self._connect() as connection:
-            connection.execute("BEGIN")
+            connection.execute("BEGIN IMMEDIATE")
+            _assert_scheduler_lease(connection, scheduler_fence)
+            if run_type == "scheduled":
+                query = (
+                    "SELECT 1 FROM dag_run WHERE dag_id = ? AND run_type = 'scheduled'"
+                )
+                params: list[Any] = [dag.dag_id]
+                if not only_once:
+                    query += " AND logical_date = ?"
+                    params.append(_iso(logical_date))
+                if connection.execute(query + " LIMIT 1", params).fetchone():
+                    raise ScheduledRunExists(
+                        f"scheduled DagRun 已存在: {dag.dag_id}/{logical_date}"
+                    )
+            if run_type == "backfill" and reprocessing_behavior is not None:
+                latest = connection.execute(
+                    "SELECT state FROM dag_run WHERE dag_id = ? AND logical_date = ? ORDER BY queued_at DESC, rowid DESC LIMIT 1",
+                    (dag.dag_id, _iso(logical_date)),
+                ).fetchone()
+                eligible = (
+                    latest is None
+                    or (reprocessing_behavior == "failed" and latest[0] == "failed")
+                    or (
+                        reprocessing_behavior == "completed"
+                        and latest[0] in ("success", "failed")
+                    )
+                )
+                if not eligible:
+                    raise BackfillRunNotEligible(
+                        f"backfill 区间已有运行: {dag.dag_id}/{logical_date}"
+                    )
+            limit = dag.max_active_runs or 1
+            active = connection.execute(
+                "SELECT COUNT(*) FROM dag_run WHERE dag_id = ? AND state IN ('queued', 'running')",
+                (dag.dag_id,),
+            ).fetchone()[0]
+            if active >= limit:
+                raise DagRunCapacityError(
+                    f"DAG {dag.dag_id!r} 已达到 max_active_runs={limit}。"
+                )
+            if run_type == "backfill" and max_active_runs is not None:
+                backfill_active = connection.execute(
+                    "SELECT COUNT(*) FROM dag_run WHERE dag_id = ? AND backfill_id = ? "
+                    "AND state IN ('queued', 'running')",
+                    (dag.dag_id, backfill_id),
+                ).fetchone()[0]
+                if backfill_active >= max_active_runs:
+                    raise DagRunCapacityError(
+                        f"backfill {backfill_id!r} 已达到 max_active_runs={max_active_runs}。"
+                    )
             connection.execute(
                 """
-                INSERT INTO dag_definition(dag_id, definition_hash, file_path, parsed_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO dag_definition(dag_id, definition_hash, file_path, parsed_at, max_active_runs)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(dag_id) DO UPDATE SET
                     definition_hash = excluded.definition_hash,
                     file_path = excluded.file_path,
-                    parsed_at = excluded.parsed_at
+                    parsed_at = excluded.parsed_at,
+                    max_active_runs = excluded.max_active_runs
                 """,
-                (dag.dag_id, definition_hash, file_path, now),
+                (dag.dag_id, definition_hash, file_path, now, dag.max_active_runs or 1),
             )
             connection.execute(
                 """
                 INSERT INTO dag_run(
                     dag_id, run_id, run_type, logical_date, data_interval_start,
                     data_interval_end, state, definition_hash, backfill_id, queued_at,
-                    conf_json
+                    conf_json, logical_timezone
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     dag.dag_id,
@@ -220,6 +327,7 @@ class SQLiteStateStore:
                     backfill_id,
                     now,
                     json.dumps(conf or {}, ensure_ascii=False),
+                    _timezone_id(logical_date),
                 ),
             )
             for task in dag.tasks:
@@ -294,7 +402,7 @@ class SQLiteStateStore:
                 SELECT state
                 FROM dag_run
                 WHERE dag_id = ? AND logical_date = ?
-                ORDER BY queued_at DESC
+                ORDER BY queued_at DESC, rowid DESC
                 LIMIT 1
                 """,
                 (dag_id, _iso(logical_date)),
@@ -360,13 +468,23 @@ class SQLiteStateStore:
             ).fetchone()
         return int(row[0])
 
+    def list_active_dag_runs(self, dag_id: str) -> list[str]:
+        self.init_db()
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT run_id FROM dag_run WHERE dag_id = ? AND state IN ('queued', 'running') "
+                "ORDER BY logical_date, queued_at, run_id",
+                (dag_id,),
+            ).fetchall()
+        return [row[0] for row in rows]
+
     def get_dag_run(self, dag_id: str, run_id: str) -> "DagRunRecord | None":
         self.init_db()
         with self._connect() as connection:
             row = connection.execute(
                 """
                 SELECT dag_id, run_id, run_type, logical_date, data_interval_start,
-                       data_interval_end, state, definition_hash, conf_json
+                       data_interval_end, state, definition_hash, conf_json, logical_timezone
                 FROM dag_run
                 WHERE dag_id = ? AND run_id = ?
                 """,
@@ -393,7 +511,44 @@ class SQLiteStateStore:
                 (state.value, start_date, end_date, dag_id, run_id),
             )
 
-    def list_task_states(self, dag_id: str, run_id: str) -> dict[str, TaskInstanceState | None]:
+    def finish_dag_run(self, dag: Any, run_id: str) -> DagRunState:
+        self.init_db()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT state FROM dag_run WHERE dag_id = ? AND run_id = ?",
+                (dag.dag_id, run_id),
+            ).fetchone()
+            if row is None:
+                raise StateConflictError(f"DagRun 不存在: {dag.dag_id}/{run_id}")
+            if row[0] in ("success", "failed"):
+                return DagRunState(row[0])
+            states = dict(
+                connection.execute(
+                    "SELECT task_id, state FROM task_instance WHERE dag_id = ? AND run_id = ? AND map_index = -1",
+                    (dag.dag_id, run_id),
+                ).fetchall()
+            )
+            if any(
+                state not in ("success", "failed", "upstream_failed", "skipped")
+                for state in states.values()
+            ):
+                return DagRunState(row[0])
+            failed = any(
+                states.get(task.task_id) in ("failed", "upstream_failed")
+                for task in dag.tasks
+                if not task.downstream_task_ids
+            )
+            result = DagRunState.FAILED if failed else DagRunState.SUCCESS
+            connection.execute(
+                "UPDATE dag_run SET state = ?, end_date = ? WHERE dag_id = ? AND run_id = ?",
+                (result.value, _utc_now(), dag.dag_id, run_id),
+            )
+            return result
+
+    def list_task_states(
+        self, dag_id: str, run_id: str
+    ) -> dict[str, TaskInstanceState | None]:
         self.init_db()
         with self._connect() as connection:
             rows = connection.execute(
@@ -438,6 +593,7 @@ class SQLiteStateStore:
         owner: str | None = None,
         lease_seconds: int = 30,
         now: datetime | None = None,
+        scheduler_fence: SchedulerFence | None = None,
     ) -> int | None:
         self.init_db()
         current = now or datetime.now(timezone.utc)
@@ -447,18 +603,37 @@ class SQLiteStateStore:
         now_iso = _iso(current)
         lease_until = _iso(current + timedelta(seconds=lease_seconds))
         with self._connect() as connection:
-            connection.execute("BEGIN")
+            connection.execute("BEGIN IMMEDIATE")
+            if now is None:
+                current = datetime.now(timezone.utc)
+                now_iso = _iso(current)
+                lease_until = _iso(current + timedelta(seconds=lease_seconds))
+            _assert_scheduler_lease(connection, scheduler_fence)
+            dag_run = connection.execute(
+                "SELECT state FROM dag_run WHERE dag_id = ? AND run_id = ?",
+                (dag_id, run_id),
+            ).fetchone()
+            if dag_run is None or dag_run[0] not in ("queued", "running"):
+                return None
             row = connection.execute(
                 """
-                SELECT state, try_number
+                SELECT state, try_number, next_retry_at
                 FROM task_instance
                 WHERE dag_id = ? AND run_id = ? AND task_id = ? AND map_index = -1
                 """,
                 (dag_id, run_id, task_id),
             ).fetchone()
             if row is None:
-                raise StateConflictError(f"TaskInstance 不存在: {dag_id}/{run_id}/{task_id}")
-            state, try_number = row
+                raise StateConflictError(
+                    f"TaskInstance 不存在: {dag_id}/{run_id}/{task_id}"
+                )
+            state, try_number, next_retry_at = row
+            if (
+                state == TaskInstanceState.UP_FOR_RETRY.value
+                and next_retry_at
+                and next_retry_at > now_iso
+            ):
+                return None
             if state == TaskInstanceState.SUCCESS.value:
                 return None
             if state in {
@@ -477,6 +652,7 @@ class SQLiteStateStore:
                 SET state = ?,
                     try_number = ?,
                     started_at = ?,
+                    next_retry_at = NULL,
                     executor_id = ?,
                     worker_pid = ?,
                     lease_expires_at = ?,
@@ -509,7 +685,14 @@ class SQLiteStateStore:
                 )
                 VALUES (?, ?, ?, -1, ?, ?, ?)
                 """,
-                (dag_id, run_id, task_id, next_try, TaskInstanceState.RUNNING.value, now_iso),
+                (
+                    dag_id,
+                    run_id,
+                    task_id,
+                    next_try,
+                    TaskInstanceState.RUNNING.value,
+                    now_iso,
+                ),
             )
             connection.execute(
                 """
@@ -524,6 +707,15 @@ class SQLiteStateStore:
                 (dag_id, run_id, task_id, next_try, now_iso, os.getpid()),
             )
         return next_try
+
+    def task_retry_at(self, dag_id: str, run_id: str, task_id: str) -> datetime | None:
+        self.init_db()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT next_retry_at FROM task_instance WHERE dag_id = ? AND run_id = ? AND task_id = ?",
+                (dag_id, run_id, task_id),
+            ).fetchone()
+        return datetime.fromisoformat(row[0]) if row and row[0] else None
 
     def renew_task_lease(
         self,
@@ -676,21 +868,40 @@ class SQLiteStateStore:
         try_number: int,
         error: BaseException,
         retries: int,
+        retry_delay: timedelta = timedelta(0),
+        retry_factor: float = 1.0,
+        max_retry_delay: timedelta | None = None,
     ) -> TaskInstanceState:
         self.init_db()
-        now = _utc_now()
-        next_state = (
-            TaskInstanceState.UP_FOR_RETRY
-            if try_number <= retries
-            else TaskInstanceState.FAILED
-        )
+        current = datetime.now(timezone.utc)
+        now = _iso(current)
         with self._connect() as connection:
-            connection.execute("BEGIN")
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT retry_base FROM task_instance WHERE dag_id = ? AND run_id = ? AND task_id = ? AND map_index = -1",
+                (dag_id, run_id, task_id),
+            ).fetchone()
+            if row is None:
+                raise StateConflictError(
+                    f"TaskInstance 不存在: {dag_id}/{run_id}/{task_id}"
+                )
+            attempt = try_number - row[0]
+            next_state = (
+                TaskInstanceState.UP_FOR_RETRY
+                if attempt <= retries
+                else TaskInstanceState.FAILED
+            )
+            next_retry = (
+                _retry_at(current, attempt, retry_delay, retry_factor, max_retry_delay)
+                if next_state == TaskInstanceState.UP_FOR_RETRY
+                else None
+            )
             updated = connection.execute(
                 """
                 UPDATE task_instance
                 SET state = ?,
                     ended_at = ?,
+                    next_retry_at = ?,
                     lease_expires_at = NULL,
                     last_heartbeat_at = NULL,
                     executor_id = NULL,
@@ -701,6 +912,7 @@ class SQLiteStateStore:
                 (
                     next_state.value,
                     now,
+                    next_retry,
                     dag_id,
                     run_id,
                     task_id,
@@ -739,6 +951,9 @@ class SQLiteStateStore:
         task_id: str,
         retries: int,
         now: datetime | None = None,
+        retry_delay: timedelta = timedelta(0),
+        retry_factor: float = 1.0,
+        max_retry_delay: timedelta | None = None,
     ) -> TaskInstanceState | None:
         self.init_db()
         current = now or datetime.now(timezone.utc)
@@ -746,18 +961,20 @@ class SQLiteStateStore:
             raise ValueError("now 必须带时区。")
         now_iso = _iso(current)
         with self._connect() as connection:
-            connection.execute("BEGIN")
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
-                SELECT state, try_number, lease_expires_at
+                SELECT state, try_number, lease_expires_at, retry_base
                 FROM task_instance
                 WHERE dag_id = ? AND run_id = ? AND task_id = ? AND map_index = -1
                 """,
                 (dag_id, run_id, task_id),
             ).fetchone()
             if row is None:
-                raise StateConflictError(f"TaskInstance 不存在: {dag_id}/{run_id}/{task_id}")
-            state, try_number, lease_expires_at = row
+                raise StateConflictError(
+                    f"TaskInstance 不存在: {dag_id}/{run_id}/{task_id}"
+                )
+            state, try_number, lease_expires_at, retry_base = row
             if state != TaskInstanceState.RUNNING.value:
                 return None
             if lease_expires_at is None:
@@ -766,14 +983,26 @@ class SQLiteStateStore:
                 return None
             next_state = (
                 TaskInstanceState.UP_FOR_RETRY
-                if int(try_number) <= retries
+                if int(try_number) - retry_base <= retries
                 else TaskInstanceState.FAILED
+            )
+            next_retry = (
+                _retry_at(
+                    current,
+                    int(try_number) - retry_base,
+                    retry_delay,
+                    retry_factor,
+                    max_retry_delay,
+                )
+                if next_state == TaskInstanceState.UP_FOR_RETRY
+                else None
             )
             updated = connection.execute(
                 """
                 UPDATE task_instance
                 SET state = ?,
                     ended_at = ?,
+                    next_retry_at = ?,
                     lease_expires_at = NULL,
                     last_heartbeat_at = NULL,
                     executor_id = NULL,
@@ -784,6 +1013,7 @@ class SQLiteStateStore:
                 (
                     next_state.value,
                     now_iso,
+                    next_retry,
                     dag_id,
                     run_id,
                     task_id,
@@ -844,12 +1074,16 @@ class SQLiteStateStore:
     ) -> dict[str, TaskInstanceState]:
         recovered: dict[str, TaskInstanceState] = {}
         for task in dag.tasks:
+            delay, factor, maximum = task_retry_settings(dag, task)
             state = self.recover_orphaned_task(
                 dag_id=dag.dag_id,
                 run_id=run_id,
                 task_id=task.task_id,
                 retries=_task_retries(dag, task),
                 now=now,
+                retry_delay=delay,
+                retry_factor=factor,
+                max_retry_delay=maximum,
             )
             if state is not None:
                 recovered[task.task_id] = state
@@ -873,11 +1107,41 @@ class SQLiteStateStore:
             connection.execute(
                 """
                 UPDATE task_instance
-                SET state = ?, ended_at = ?
+                SET state = ?, ended_at = ?, next_retry_at = NULL
                 WHERE dag_id = ? AND run_id = ? AND task_id = ? AND map_index = -1
-                  AND state IS NULL
+                  AND (state IS NULL OR state IN ('scheduled', 'queued', 'up_for_retry'))
                 """,
                 (state.value, now, dag_id, run_id, task_id),
+            )
+
+    def fail_worker_startup(
+        self, dag_id: str, run_id: str, task_id: str, *, message: str, log_path: str
+    ) -> None:
+        self.init_db()
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT state, try_number FROM task_instance WHERE dag_id = ? AND run_id = ? AND task_id = ? AND map_index = -1",
+                (dag_id, run_id, task_id),
+            ).fetchone()
+            if row is None or row[0] not in (
+                None,
+                "queued",
+                "scheduled",
+                "up_for_retry",
+            ):
+                return
+            attempt = row[1] + 1
+            connection.execute(
+                "UPDATE task_instance SET state = 'failed', try_number = ?, ended_at = ?, next_retry_at = NULL "
+                "WHERE dag_id = ? AND run_id = ? AND task_id = ? AND map_index = -1",
+                (attempt, now, dag_id, run_id, task_id),
+            )
+            connection.execute(
+                "INSERT INTO task_try(dag_id, run_id, task_id, map_index, try_number, state, started_at, ended_at, log_path, error_code, error_message) "
+                "VALUES (?, ?, ?, -1, ?, 'failed', ?, ?, ?, 'WORKER_STARTUP_FAILED', ?)",
+                (dag_id, run_id, task_id, attempt, now, now, log_path, message),
             )
 
     def pull_xcom(
@@ -900,7 +1164,9 @@ class SQLiteStateStore:
             raise KeyError(f"XCom 不存在: {dag_id}/{run_id}/{task_id}/{key}")
         return json.loads(row[0])
 
-    def latest_task_log_path(self, dag_id: str, run_id: str, task_id: str) -> str | None:
+    def latest_task_log_path(
+        self, dag_id: str, run_id: str, task_id: str
+    ) -> str | None:
         self.init_db()
         with self._connect() as connection:
             row = connection.execute(
@@ -929,7 +1195,11 @@ class SQLiteStateStore:
         current_iso = _iso(current)
         expires_iso = _iso(expires_at)
         with self._connect() as connection:
-            connection.execute("BEGIN")
+            connection.execute("BEGIN IMMEDIATE")
+            if now is None:
+                current = datetime.now(timezone.utc)
+                current_iso = _iso(current)
+                expires_iso = _iso(current + timedelta(seconds=lease_seconds))
             row = connection.execute(
                 """
                 SELECT owner, lease_expires_at
@@ -947,7 +1217,10 @@ class SQLiteStateStore:
                 )
                 return SchedulerLeaseResult(True, owner, expires_iso)
             existing_owner, existing_expires = row
-            if existing_owner != owner and datetime.fromisoformat(existing_expires) > current:
+            if (
+                existing_owner != owner
+                and datetime.fromisoformat(existing_expires) > current
+            ):
                 return SchedulerLeaseResult(False, existing_owner, existing_expires)
             connection.execute(
                 """
@@ -958,6 +1231,25 @@ class SQLiteStateStore:
                 (owner, expires_iso, current_iso),
             )
             return SchedulerLeaseResult(True, owner, expires_iso)
+
+    def renew_scheduler_lease(
+        self, *, owner: str, lease_seconds: int, now: datetime | None = None
+    ) -> bool:
+        self.init_db()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = now or datetime.now(timezone.utc)
+            updated = connection.execute(
+                "UPDATE scheduler_lease SET lease_expires_at = ?, updated_at = ? "
+                "WHERE lease_id = 'singleton' AND owner = ? AND lease_expires_at > ?",
+                (
+                    _iso(current + timedelta(seconds=lease_seconds)),
+                    _iso(current),
+                    owner,
+                    _iso(current),
+                ),
+            ).rowcount
+        return updated == 1
 
     def release_scheduler_lease(self, *, owner: str) -> None:
         self.init_db()
@@ -1045,29 +1337,60 @@ class SQLiteStateStore:
         actor: str = "cli",
         reason: str = "",
     ) -> "ClearTaskResult":
-        preview = self.preview_clear_task_instances(
-            dag_id=dag_id,
-            run_id=run_id,
-            task_ids=task_ids,
-        )
-        if preview.blocked:
-            return ClearTaskResult(
-                to_clear=preview.to_clear,
-                blocked=preview.blocked,
-                dry_run=False,
-            )
-        if not preview.to_clear:
-            return ClearTaskResult(to_clear=[], blocked=[], dry_run=False)
+        self.init_db()
         now = _utc_now()
-        payload = {
-            "actor": actor,
-            "reason": reason,
-            "task_ids": preview.to_clear,
-        }
         with self._connect() as connection:
-            connection.execute("BEGIN")
-            placeholders = ",".join("?" for _ in preview.to_clear)
-            params = [dag_id, run_id, *preview.to_clear]
+            connection.execute("BEGIN IMMEDIATE")
+            rows = self._select_clear_candidates(
+                dag_id, run_id, task_ids, connection=connection
+            )
+            allowed = {
+                "success",
+                "failed",
+                "upstream_failed",
+                "skipped",
+                "up_for_retry",
+            }
+            to_clear = [task_id for task_id, state in rows if state in allowed]
+            blocked = [
+                ClearBlockedTask(
+                    task_id, state, "只允许 clear 终态或 up_for_retry 任务。"
+                )
+                for task_id, state in rows
+                if state not in allowed
+            ]
+            if blocked or not to_clear:
+                return ClearTaskResult(
+                    to_clear=to_clear, blocked=blocked, dry_run=False
+                )
+            run = connection.execute(
+                "SELECT state FROM dag_run WHERE dag_id = ? AND run_id = ?",
+                (dag_id, run_id),
+            ).fetchone()
+            if run and run[0] in ("success", "failed"):
+                limit_row = connection.execute(
+                    "SELECT max_active_runs FROM dag_definition WHERE dag_id = ?",
+                    (dag_id,),
+                ).fetchone()
+                limit = limit_row[0] if limit_row else 1
+                active = connection.execute(
+                    "SELECT COUNT(*) FROM dag_run WHERE dag_id = ? AND state IN ('queued', 'running')",
+                    (dag_id,),
+                ).fetchone()[0]
+                if active >= limit:
+                    blocked = [
+                        ClearBlockedTask(
+                            task_id, state, f"DAG 已达到 max_active_runs={limit}。"
+                        )
+                        for task_id, state in rows
+                        if task_id in to_clear
+                    ]
+                    return ClearTaskResult(
+                        to_clear=to_clear, blocked=blocked, dry_run=False
+                    )
+            payload = {"actor": actor, "reason": reason, "task_ids": to_clear}
+            placeholders = ",".join("?" for _ in to_clear)
+            params = [dag_id, run_id, *to_clear]
             connection.execute(
                 f"""
                 DELETE FROM xcom
@@ -1079,6 +1402,7 @@ class SQLiteStateStore:
                 f"""
                 UPDATE task_instance
                 SET state = NULL,
+                    retry_base = try_number,
                     queued_at = NULL,
                     started_at = NULL,
                     ended_at = NULL,
@@ -1118,7 +1442,7 @@ class SQLiteStateStore:
                     now,
                 ),
             )
-        return ClearTaskResult(to_clear=preview.to_clear, blocked=[], dry_run=False)
+        return ClearTaskResult(to_clear=to_clear, blocked=[], dry_run=False)
 
     def list_audit_actions(self) -> list[tuple[str, str | None, str | None]]:
         self.init_db()
@@ -1137,6 +1461,8 @@ class SQLiteStateStore:
         dag_id: str,
         run_id: str,
         task_ids: list[str] | None,
+        *,
+        connection: sqlite3.Connection | None = None,
     ) -> list[tuple[str, str | None]]:
         query = """
             SELECT task_id, state
@@ -1149,7 +1475,10 @@ class SQLiteStateStore:
             query += f" AND task_id IN ({placeholders})"
             params.extend(task_ids)
         query += " ORDER BY task_id"
-        with self._connect() as connection:
+        if connection is None:
+            with self._connect() as connection:
+                rows = connection.execute(query, params).fetchall()
+        else:
             rows = connection.execute(query, params).fetchall()
         return [(row[0], row[1]) for row in rows]
 
@@ -1171,6 +1500,7 @@ class DagRunRecord:
     state: str
     definition_hash: str | None
     conf_json: str | None
+    logical_timezone: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1211,11 +1541,126 @@ def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat()
 
 
+def _assert_scheduler_lease(
+    connection: sqlite3.Connection, fence: SchedulerFence | None
+) -> None:
+    if fence is None:
+        return
+    current = max(
+        datetime.now(timezone.utc),
+        fence.started_at
+        + timedelta(seconds=time.monotonic() - fence.started_monotonic),
+    )
+    row = connection.execute(
+        "SELECT 1 FROM scheduler_lease WHERE lease_id = 'singleton' AND owner = ? AND lease_expires_at > ?",
+        (fence.owner, _iso(current)),
+    ).fetchone()
+    if row is None:
+        raise SchedulerLeaseLost("scheduler lease 已丢失，停止调度。")
+
+
+def _restore_retry_baselines(connection: sqlite3.Connection) -> None:
+    rows = connection.execute(
+        "SELECT dag_id, run_id, payload_json, created_at FROM audit_log "
+        "WHERE action = 'tasks_clear' ORDER BY audit_id"
+    ).fetchall()
+    for dag_id, run_id, payload_json, cleared_at in rows:
+        try:
+            payload = json.loads(payload_json)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict) or not isinstance(
+            payload.get("task_ids"), list
+        ):
+            continue
+        for task_id in payload["task_ids"]:
+            if not isinstance(task_id, str):
+                continue
+            row = connection.execute(
+                "SELECT COALESCE(MAX(try_number), 0) FROM task_try "
+                "WHERE dag_id = ? AND run_id = ? AND task_id = ? AND map_index = -1 "
+                "AND COALESCE(started_at, ended_at) <= ?",
+                (dag_id, run_id, task_id, cleared_at),
+            ).fetchone()
+            connection.execute(
+                "UPDATE task_instance SET retry_base = ? "
+                "WHERE dag_id = ? AND run_id = ? AND task_id = ? AND map_index = -1",
+                (row[0], dag_id, run_id, task_id),
+            )
+    connection.execute(
+        "UPDATE task_instance SET retry_base = try_number "
+        "WHERE state IS NULL AND try_number > 0 AND retry_base = 0"
+    )
+
+
+def _timezone_id(value: datetime) -> str:
+    if value.tzinfo is None:
+        raise ValueError("datetime 必须带时区。")
+    key = getattr(value.tzinfo, "key", None) or getattr(value.tzinfo, "zone", None)
+    if key:
+        return f"zone:{key}"
+    return f"offset:{int(value.utcoffset().total_seconds())}"
+
+
+def run_timezone(value: str | None) -> tzinfo:
+    if value and value.startswith("zone:"):
+        try:
+            return ZoneInfo(value[5:])
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"运行时区不可用: {value[5:]}") from exc
+    if value and value.startswith("offset:"):
+        return timezone(timedelta(seconds=int(value[7:])))
+    return timezone.utc
+
+
+def task_retry_settings(
+    dag: Any, task: Any
+) -> tuple[timedelta, float, timedelta | None]:
+    delay = (
+        task.retry_delay
+        if task.retry_delay is not None
+        else dag.default_args.get("retry_delay", timedelta(0))
+    )
+    maximum = (
+        task.max_retry_delay
+        if task.max_retry_delay is not None
+        else dag.default_args.get("max_retry_delay")
+    )
+    backoff = task.retry_exponential_backoff
+    factor = 2.0 if backoff is True else max(1.0, float(backoff or 1))
+    return delay or timedelta(0), factor, maximum
+
+
+def _retry_at(
+    current: datetime,
+    attempt: int,
+    delay: timedelta,
+    factor: float,
+    maximum: timedelta | None,
+) -> str:
+    try:
+        seconds = delay.total_seconds() * factor ** max(0, attempt - 1)
+    except OverflowError:
+        seconds = float("inf")
+    if maximum is not None:
+        seconds = min(seconds, maximum.total_seconds())
+    seconds = max(
+        0,
+        min(
+            seconds,
+            (datetime.max.replace(tzinfo=timezone.utc) - current).total_seconds() - 1,
+        ),
+    )
+    return _iso(current + timedelta(seconds=seconds))
+
+
 def _json_dumps_xcom(value: Any) -> str:
     try:
         encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError) as exc:
-        raise XComSerializationError(f"XCom value is not JSON serializable: {exc}") from exc
+        raise XComSerializationError(
+            f"XCom value is not JSON serializable: {exc}"
+        ) from exc
     if len(encoded.encode("utf-8")) > MAX_XCOM_BYTES:
         raise XComValueTooLargeError(f"XCom value exceeds {MAX_XCOM_BYTES} bytes.")
     return encoded

@@ -18,7 +18,7 @@ def _iter_xcom_args(value: Any) -> list[XComArg]:
         for item in value.values():
             found.extend(_iter_xcom_args(item))
         return found
-    if isinstance(value, (list, tuple, set)):
+    if isinstance(value, (list, tuple, set, frozenset)):
         found = []
         for item in value:
             found.extend(_iter_xcom_args(item))
@@ -43,7 +43,9 @@ class TaskDecorator:
 
     def __call__(self, *args: Any, **kwargs: Any) -> XComArg:
         dag = self.operator_kwargs.get("dag") or current_dag()
-        base_task_id = self.operator_kwargs.get("task_id") or self.python_callable.__name__
+        base_task_id = (
+            self.operator_kwargs.get("task_id") or self.python_callable.__name__
+        )
         task_id = dag.next_task_id(base_task_id) if dag is not None else base_task_id
         op_kwargs = dict(self.operator_kwargs)
         op_kwargs["task_id"] = task_id
