@@ -209,6 +209,9 @@ tempCodeRunnerFile.py
 # easyflow 本地运行状态和账户初始化凭据
 /.easyflow/
 
+# easyflow 本地运行数据
+/data/
+
 # PyPI configuration file
 .pypirc
 
