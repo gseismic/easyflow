@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from easyflow._internal.dag_parser import DagDiscoveryResult, DagSource
+from easyflow.providers.standard.operators.empty import EmptyOperator
 from easyflow.sdk import DAG
 from easyflow.web.app import create_app
 
@@ -171,6 +172,89 @@ def test_workflow_search_and_pagination_cover_all_candidates(tmp_path, monkeypat
     ).json()
     assert second["dags"][0]["dag_id"] == "z_bulk_025"
     assert len(sources) == 188
+
+
+def test_task_search_uses_current_workflows_and_saved_run_tasks(tmp_path, monkeypatch):
+    app, client, sources, _ = setup_catalog(tmp_path, monkeypatch)
+    quant = next(source.dag for source in sources if source.dag_id == "quant_prices")
+    EmptyOperator(task_id="preview_prices", dag=quant)
+    with sqlite3.connect(app.state.service.store.path) as connection:
+        insert_run(connection, "quant_prices", "older", "failed")
+        insert_run(connection, "quant_prices", "newer", "success")
+        insert_run(connection, "removed_workflow", "removed", "failed")
+        connection.executemany(
+            "INSERT INTO task_instance (dag_id, run_id, task_id, state) VALUES (?, ?, ?, ?)",
+            [
+                ("quant_prices", "older", "historic_prices", "failed"),
+                ("quant_prices", "newer", "unrelated", "success"),
+                ("removed_workflow", "removed", "historic_prices", "failed"),
+            ],
+        )
+    login(client)
+
+    workflow = client.get("/api/workflows", params={"q": "QUANT preview"}).json()
+    assert [row["dag_id"] for row in workflow["dags"]] == ["quant_prices"]
+    assert workflow["dags"][0]["matched_task_ids"] == ["preview_prices"]
+    facets = client.get("/api/workflows/facets", params={"q": "preview"}).json()
+    assert facet_group(facets, "project", "quant")["matched"] == 1
+
+    # 历史只匹配对应运行中已保存的任务，不能借用工作流当前定义。
+    assert (
+        client.get("/api/history/runs", params={"q": "preview_prices"}).json()["runs"]
+        == []
+    )
+    history = client.get("/api/history/runs", params={"q": "historic_prices"}).json()
+    assert {(row["dag_id"], row["run_id"]) for row in history["runs"]} == {
+        ("quant_prices", "older"),
+        ("removed_workflow", "removed"),
+    }
+    assert all(row["matched_task_ids"] == ["historic_prices"] for row in history["runs"])
+    quant_history = next(row for row in history["runs"] if row["dag_id"] == "quant_prices")
+    assert quant_history["description"] == "行情采集"
+    first_page = client.get(
+        "/api/history/runs", params={"q": "historic_prices", "limit": 1}
+    ).json()
+    second_page = client.get(
+        "/api/history/runs",
+        params={"q": "historic_prices", "limit": 1, "cursor": first_page["next_cursor"]},
+    ).json()
+    assert {first_page["runs"][0]["run_id"], second_page["runs"][0]["run_id"]} == {
+        "older", "removed"
+    }
+    filtered = client.get(
+        "/api/history/runs",
+        params={
+            "q": "quant historic",
+            "state": "failed",
+            "project_kind": "project",
+            "project": "quant",
+            "tag": "daily",
+        },
+    ).json()
+    assert [(row["dag_id"], row["run_id"]) for row in filtered["runs"]] == [
+        ("quant_prices", "older")
+    ]
+    facets = client.get("/api/history/runs/facets", params={"q": "historic_prices"}).json()
+    assert facet_group(facets, "project", "quant")["matched"] == 1
+    assert facet_group(facets, "unknown")["matched"] == 1
+
+
+def test_workflow_task_changes_invalidate_facets_and_many_search_terms(tmp_path, monkeypatch):
+    _, client, sources, _ = setup_catalog(tmp_path, monkeypatch)
+    login(client)
+    first = client.get("/api/workflows/facets", params={"q": "new_task"}).json()
+    assert facet_group(first, "project", "quant")["matched"] == 0
+    quant = next(source.dag for source in sources if source.dag_id == "quant_prices")
+    EmptyOperator(task_id="new_task", dag=quant)
+    second = client.get("/api/workflows/facets", params={"q": "new_task"}).json()
+    assert facet_group(second, "project", "quant")["matched"] == 1
+
+    # 长查询不会因重复词而突破 SQLite 的绑定参数上限。
+    long_query = "a " * 499
+    assert client.get("/api/history/runs", params={"q": long_query}).status_code == 200
+    assert (
+        client.get("/api/history/runs/facets", params={"q": long_query}).status_code == 200
+    )
 
 
 def test_history_filters_before_pagination_and_keeps_unknown(tmp_path, monkeypatch):

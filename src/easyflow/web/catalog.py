@@ -15,6 +15,7 @@ class WorkflowMetadata:
     project_kind: ProjectKind
     project: str | None
     tags: tuple[str, ...]
+    task_ids: tuple[str, ...] = ()
     issue: str | None = None
 
     @property
@@ -22,6 +23,10 @@ class WorkflowMetadata:
         return " ".join(
             (self.dag_id, self.description, self.project or "", *self.tags)
         ).casefold()
+
+    @property
+    def workflow_search_text(self) -> str:
+        return " ".join((self.search_text, *self.task_ids)).casefold()
 
     def as_dict(self) -> dict:
         return {
@@ -68,6 +73,7 @@ def workflow_metadata(source: DagSource) -> WorkflowMetadata:
         project_kind=kind,
         project=project,
         tags=tuple(sorted(tags, key=lambda value: (value.casefold(), value))),
+        task_ids=tuple(sorted(task.task_id for task in source.dag.tasks)),
         issue=issue,
     )
 

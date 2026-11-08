@@ -18,3 +18,8 @@
 - 2026-11-08 20:22 Asia/Shanghai：[标签批量选择、项目统计与历史入口计划](PLAN-20261108-007-model-unknown-filter-counts.md)，进行中。
 - 2026-11-08 20:48 Asia/Shanghai：[标签批量选择、项目统计与历史入口结果](PLAN-20261108-007-model-unknown-filter-counts-OUTCOME.md)，已实施并通过全量测试、隔离浏览器、规模和实际服务验证；结果记录完成时的 WORKTREE，提交信息见 Git 记录。
 - 2026-11-08 21:40 Asia/Shanghai：[标签筛选交互补充结果](PLAN-20261108-007-model-unknown-filter-counts-OUTCOME.md)，点击外部和按 `Esc` 可收起标签面板，已完成构建与浏览器验证。
+- 2026-11-08 22:45 Asia/Shanghai：[搜索与过滤体验修复计划](PLAN-20261108-008-model-unknown-search-filter-ux.md)，进行中。
+- 2026-11-08 23:12 Asia/Shanghai：[搜索与过滤体验修复结果](PLAN-20261108-008-model-unknown-search-filter-ux-OUTCOME.md)，实施并验证完成；保留既有检查问题 `KI-20261108-2311-001`。
+- 2026-11-08 23:15 Asia/Shanghai：[搜索与过滤体验补充验证](PLAN-20261108-008-model-unknown-search-filter-ux-OUTCOME.md)，优化移动端点击区域和超长名称，并更新本机静态资源。
+- 2026-11-08 23:36 Asia/Shanghai：[工作流详情内的运行历史计划](PLAN-20261108-009-model-unknown-workflow-run-history.md)，进行中。
+- 2026-11-08 23:45 Asia/Shanghai：[工作流详情内的运行历史结果](PLAN-20261108-009-model-unknown-workflow-run-history-OUTCOME.md)，实施并验证完成；本机静态入口已更新。

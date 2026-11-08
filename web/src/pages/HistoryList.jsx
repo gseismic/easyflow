@@ -1,8 +1,10 @@
 import { usePolling } from "../api";
 import { runTypeLabel } from "../components/RunMetadata";
 import SearchBox from "../components/SearchBox";
+import SearchContext from "../components/SearchContext";
 import Status, { formatDuration, formatTime } from "../components/Status";
 import useFacets from "../components/useFacets";
+import usePendingRefresh from "../components/usePendingRefresh";
 import WorkflowFilters, { appendWorkflowFilters, selectedFacetCount } from "../components/WorkflowFilters";
 import WorkflowLabels from "../components/WorkflowLabels";
 
@@ -14,13 +16,14 @@ const filters = [
   ["failed", "失败"],
 ];
 
-export default function HistoryList({ view, setView, filters: selection, onFiltersChange, onReset, catalog, dagId }) {
+export default function HistoryList({ view, setView, filters: selection, onFiltersChange, onReset, catalog, dagId, allRunsHref }) {
   const params = appendWorkflowFilters(new URLSearchParams({ limit: "25" }), selection);
   if (dagId) params.set("dag_id", dagId);
   if (view.query) params.set("q", view.query);
   if (view.state) params.set("state", view.state);
   if (view.cursors[view.page]) params.set("cursor", view.cursors[view.page]);
   const history = usePolling(`/api/history/runs?${params}`, 5000);
+  usePendingRefresh(history, history.data?.metadata_loading);
   const facetParams = appendWorkflowFilters(new URLSearchParams(), selection, false);
   if (dagId) facetParams.set("dag_id", dagId);
   if (view.query) facetParams.set("q", view.query);
@@ -79,45 +82,58 @@ export default function HistoryList({ view, setView, filters: selection, onFilte
           <span className="count">{totalLabel}</span>
         </div>
         <div className="discovery-tools">
-          <WorkflowFilters
-            catalog={catalog}
-            facets={facets}
-            filters={selection}
-            onChange={onFiltersChange}
-            onReset={onReset}
-            hasOtherFilters={Boolean(view.query || view.draft || view.state || dagId)}
-            pendingSearch={pendingSearch}
-            unit="次运行"
-            showUnknown
-          />
-          <SearchBox
-            label="搜索运行历史"
-            placeholder="搜索工作流、项目、标签或运行 ID"
-            query={view.query}
-            value={view.draft}
-            resetVersion={view.resetVersion}
-            onDraftChange={(draft) => setView((current) => ({ ...current, draft }))}
-            onSearch={(query) => {
-              if (query !== view.query) setFilter({ query });
-            }}
-          />
-          <div className="filter-group" aria-label="筛选运行状态">
-            {filters.map(([value, label]) => (
-              <button
-                key={value}
-                className={view.state === value ? "filter active" : "filter"}
-                aria-pressed={view.state === value}
-                onClick={() => setFilter({ state: value })}
-              >
-                {label}
-              </button>
-            ))}
+          <div className="search-section" role="search" aria-label="搜索运行历史">
+            <span className="discovery-label">搜索</span>
+            <div className="search-content">
+              <SearchBox
+                label="搜索运行历史"
+                placeholder="搜索工作流、运行 ID 或任务 ID"
+                describedBy="history-search-help"
+                query={view.query}
+                value={view.draft}
+                resetVersion={view.resetVersion}
+                onDraftChange={(draft, draftComposing) => setView((current) => ({ ...current, draft, draftComposing }))}
+                onSearch={(query) => {
+                  if (query !== view.query) setFilter({ query });
+                }}
+              />
+              <p id="history-search-help" className="search-help">也可搜索当前描述、项目和标签；多个关键词需全部匹配。</p>
+            </div>
+          </div>
+          <div className="filter-section">
+            <span className="discovery-label">过滤</span>
+            <WorkflowFilters
+              catalog={catalog}
+              facets={facets}
+              filters={selection}
+              onChange={onFiltersChange}
+              onReset={onReset}
+              hasOtherFilters={Boolean(view.state || dagId)}
+              hasSearch={Boolean(view.query || view.draft)}
+              pendingSearch={pendingSearch}
+              resetVersion={view.filterResetVersion}
+              unit="次运行"
+              showUnknown
+            >
+              <div className="filter-group" role="group" aria-label="过滤运行状态">
+                {filters.map(([value, label]) => (
+                  <button
+                    key={value}
+                    className={view.state === value ? "filter active" : "filter"}
+                    aria-pressed={view.state === value}
+                    onClick={() => setFilter({ state: value })}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </WorkflowFilters>
           </div>
         </div>
         {dagId && (
           <div className="history-scope">
             <span>工作流：<strong>{dagId}</strong></span>
-            <a className="link-button" href="#/history">查看所有工作流</a>
+            <a className="link-button" href={allRunsHref}>查看所有工作流</a>
           </div>
         )}
         {(catalog.data?.loading || history.data?.metadata_loading) && (
@@ -142,7 +158,7 @@ export default function HistoryList({ view, setView, filters: selection, onFilte
             </strong>
             <span>
               {view.query || view.state || dagId || selection.projectKind !== "all" || selection.tags.length
-                ? "请调整搜索关键词、项目、标签或状态筛选。"
+                ? "请清除搜索或调整过滤条件。"
                 : "工作流开始执行后，记录会显示在这里。"}
             </span>
           </div>
@@ -182,6 +198,7 @@ export default function HistoryList({ view, setView, filters: selection, onFilte
                         >
                           {run.run_id}
                         </small>
+                        <SearchContext item={run} query={view.query} history />
                         <WorkflowLabels item={run} filters={selection} onChange={onFiltersChange} />
                       </td>
                       <td>

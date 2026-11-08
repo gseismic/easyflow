@@ -31,12 +31,17 @@ export default function WorkflowFilters({
   onChange,
   onReset,
   hasOtherFilters,
+  hasSearch,
   pendingSearch,
+  resetVersion,
   unit,
   showUnknown = false,
+  children,
 }) {
   const [tagQuery, setTagQuery] = useState("");
   const tagFilterRef = useRef(null);
+
+  useEffect(() => setTagQuery(""), [resetVersion]);
 
   useEffect(() => {
     const details = tagFilterRef.current;
@@ -77,7 +82,7 @@ export default function WorkflowFilters({
   const selectedValue = projectValue(filters.projectKind, filters.project || "");
   const selectedMissing = filters.projectKind === "project" && !projects.includes(filters.project);
   const changed = filters.projectKind !== "all" || filters.tags.length > 0 || hasOtherFilters;
-  const hasMatchFilter = filters.tags.length > 0 || hasOtherFilters;
+  const hasMatchFilter = filters.tags.length > 0 || hasOtherFilters || hasSearch;
   const catalogIncomplete = Boolean(catalog.data?.loading || catalog.data?.issues?.length);
   const ready = Boolean(facets.data?.complete && !facets.error && !catalog.error && !catalogIncomplete && !pendingSearch);
   const countFor = (kind, project = "") => {
@@ -103,74 +108,109 @@ export default function WorkflowFilters({
     ...filters,
     tags: [...new Set([...filters.tags, ...visibleTags])],
   });
+  const projectLabels = {
+    unassigned: "未分组",
+    conflict: "项目异常",
+    unknown: "项目未知",
+  };
+  const selectedProjectLabel = filters.projectKind === "project"
+    ? filters.project : projectLabels[filters.projectKind];
 
   return (
     <div className="workflow-filters">
-      <label className="project-filter">
-        <span>项目（{projectCount}）</span>
-        <select
-          aria-label="筛选项目"
-          value={selectedValue}
-          onFocus={facets.refresh}
-          onChange={(event) => {
-            const [projectKind, project] = JSON.parse(event.target.value);
-            onChange({ ...filters, projectKind, project });
-          }}
-        >
-          <option value={projectValue("all")}>{labelFor("全部项目", "all")}</option>
-          <option value={projectValue("unassigned")}>{labelFor("未分组", "unassigned")}</option>
-          <option value={projectValue("conflict")}>{labelFor("项目异常", "conflict")}</option>
-          {(showUnknown || filters.projectKind === "unknown") && (
-            <option value={projectValue("unknown")}>{labelFor("项目未知", "unknown")}</option>
+      <div className="filter-row">
+        <label className="project-filter">
+          <span>项目（{projectCount}）</span>
+          <select
+            aria-label="筛选项目"
+            value={selectedValue}
+            onFocus={facets.refresh}
+            onChange={(event) => {
+              const [projectKind, project] = JSON.parse(event.target.value);
+              onChange({ ...filters, projectKind, project });
+            }}
+          >
+            <option value={projectValue("all")}>{labelFor("全部项目", "all")}</option>
+            <option value={projectValue("unassigned")}>{labelFor("未分组", "unassigned")}</option>
+            <option value={projectValue("conflict")}>{labelFor("项目异常", "conflict")}</option>
+            {(showUnknown || filters.projectKind === "unknown") && (
+              <option value={projectValue("unknown")}>{labelFor("项目未知", "unknown")}</option>
+            )}
+            {selectedMissing && (
+              <option value={selectedValue}>{labelFor(filters.project, "project", filters.project)}</option>
+            )}
+            {projects.map((project) => (
+              <option value={projectValue("project", project)} key={project}>
+                {labelFor(project, "project", project)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <details className="tag-filter" ref={tagFilterRef}>
+          <summary>标签{filters.tags.length ? ` (${filters.tags.length})` : ""}</summary>
+          <div className="tag-filter-menu">
+            <input
+              aria-label="搜索标签"
+              placeholder="搜索标签"
+              value={tagQuery}
+              onChange={(event) => setTagQuery(event.target.value)}
+            />
+            <div className="tag-actions">
+              <button className="link-button" disabled={!visibleTags.length} onClick={selectVisibleTags}>
+                全选当前列表
+              </button>
+              <button className="link-button" disabled={!filters.tags.length} onClick={() => onChange({ ...filters, tags: [] })}>
+                全部不选
+              </button>
+            </div>
+            <div className="tag-options">
+              {visibleTags.length ? visibleTags.map((tag) => (
+                <label key={tag}>
+                  <input
+                    type="checkbox"
+                    checked={filters.tags.includes(tag)}
+                    onChange={(event) => onChange({
+                      ...filters,
+                      tags: event.target.checked
+                        ? [...filters.tags, tag]
+                        : filters.tags.filter((item) => item !== tag),
+                    })}
+                  />
+                  <span title={tag}>{tag}</span>
+                </label>
+              )) : <p>没有匹配的标签。</p>}
+            </div>
+            <p className="tag-help">匹配任一选中标签；全部不选时不限标签，包括无标签工作流。</p>
+          </div>
+        </details>
+        {children}
+        {changed && <button className="link-button clear-filters" onClick={onReset}>清除过滤</button>}
+      </div>
+      {(selectedProjectLabel || filters.tags.length > 0) && (
+        <div className="active-filters" role="group" aria-label="已选过滤条件">
+          <span>已选</span>
+          {selectedProjectLabel && (
+            <button
+              type="button"
+              className="active-filter"
+              aria-label={`移除项目过滤：${selectedProjectLabel}`}
+              title={`项目：${selectedProjectLabel}`}
+              onClick={() => onChange({ ...filters, projectKind: "all", project: "" })}
+            ><span className="filter-value">项目：{selectedProjectLabel}</span><span className="filter-remove" aria-hidden="true">×</span></button>
           )}
-          {selectedMissing && (
-            <option value={selectedValue}>{labelFor(filters.project, "project", filters.project)}</option>
-          )}
-          {projects.map((project) => (
-            <option value={projectValue("project", project)} key={project}>
-              {labelFor(project, "project", project)}
-            </option>
+          {filters.tags.map((tag) => (
+            <button
+              type="button"
+              key={tag}
+              className="active-filter"
+              aria-label={`移除标签过滤：${tag}`}
+              title={`标签：${tag}`}
+              onClick={() => onChange({ ...filters, tags: filters.tags.filter((item) => item !== tag) })}
+            ><span className="filter-value">{tag}</span><span className="filter-remove" aria-hidden="true">×</span></button>
           ))}
-        </select>
-      </label>
-      <details className="tag-filter" ref={tagFilterRef}>
-        <summary>标签{filters.tags.length ? ` (${filters.tags.length})` : ""}</summary>
-        <div className="tag-filter-menu">
-          <input
-            aria-label="搜索标签"
-            placeholder="搜索标签"
-            value={tagQuery}
-            onChange={(event) => setTagQuery(event.target.value)}
-          />
-          <div className="tag-actions">
-            <button className="link-button" disabled={!visibleTags.length} onClick={selectVisibleTags}>
-              全选当前列表
-            </button>
-            <button className="link-button" disabled={!filters.tags.length} onClick={() => onChange({ ...filters, tags: [] })}>
-              全部不选
-            </button>
-          </div>
-          <div className="tag-options">
-            {visibleTags.length ? visibleTags.map((tag) => (
-              <label key={tag}>
-                <input
-                  type="checkbox"
-                  checked={filters.tags.includes(tag)}
-                  onChange={(event) => onChange({
-                    ...filters,
-                    tags: event.target.checked
-                      ? [...filters.tags, tag]
-                      : filters.tags.filter((item) => item !== tag),
-                  })}
-                />
-                <span title={tag}>{tag}</span>
-              </label>
-            )) : <p>没有匹配的标签。</p>}
-          </div>
-          <p className="tag-help">匹配任一选中标签；全部不选时不限标签，包括无标签工作流。</p>
+          {filters.tags.length > 1 && <span>标签匹配任意一项</span>}
         </div>
-      </details>
-      {changed && <button className="link-button" onClick={onReset}>重置全部</button>}
+      )}
       <span className="facet-note" role="status" title={`${hasMatchFilter ? "项目数量为当前匹配数 / 总数" : "项目数量为总数"}${ready ? `；统计时间 ${formatTime(calculatedAt)}` : ""}`}>
         {statusText}{ready && hasMatchFilter ? " · 匹配 / 总数" : ""}
       </span>

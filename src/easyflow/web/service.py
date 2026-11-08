@@ -63,32 +63,39 @@ def _history_conditions(
             "EXISTS (SELECT 1 FROM workflow_tags t "
             "JOIN selected_tags s ON s.tag = t.tag WHERE t.dag_id = r.dag_id)"
         )
-    for term in search_terms(query):
+    if search_terms(query):
         conditions.append(
-            "instr(casefold(r.dag_id || ' ' || r.run_id) || ' ' || "
-            "COALESCE(m.search_text, ''), ?) > 0"
+            "NOT EXISTS (SELECT 1 FROM selected_search_terms s "
+            "WHERE instr(casefold(r.dag_id || ' ' || r.run_id) || ' ' || "
+            "COALESCE(m.search_text, ''), s.term) = 0 AND NOT EXISTS "
+            "(SELECT 1 FROM task_instance ti WHERE ti.dag_id = r.dag_id "
+            "AND ti.run_id = r.run_id AND instr(casefold(ti.task_id), s.term) > 0))"
         )
-        params.append(term)
     return conditions, params
 
 
 def _prepare_history_metadata(
-    connection: sqlite3.Connection, metadata: list, tags: list[str]
+    connection: sqlite3.Connection, metadata: list, tags: list[str], terms: list[str]
 ) -> None:
     connection.create_function("casefold", 1, str.casefold, deterministic=True)
     connection.execute(
         "CREATE TEMP TABLE workflow_metadata (dag_id TEXT PRIMARY KEY, "
-        "project_kind TEXT, project TEXT, tags TEXT, search_text TEXT, issue TEXT)"
+        "project_kind TEXT, project TEXT, tags TEXT, search_text TEXT, "
+        "description TEXT, issue TEXT)"
     )
     connection.execute(
         "CREATE TEMP TABLE workflow_tags (dag_id TEXT, tag TEXT, PRIMARY KEY (dag_id, tag))"
     )
     connection.execute("CREATE TEMP TABLE selected_tags (tag TEXT PRIMARY KEY)")
+    connection.execute("CREATE TEMP TABLE selected_search_terms (term TEXT PRIMARY KEY)")
     connection.executemany(
         "INSERT INTO selected_tags VALUES (?)", ((tag,) for tag in set(tags))
     )
     connection.executemany(
-        "INSERT INTO workflow_metadata VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO selected_search_terms VALUES (?)", ((term,) for term in set(terms))
+    )
+    connection.executemany(
+        "INSERT INTO workflow_metadata VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             (
                 item.dag_id,
@@ -96,6 +103,7 @@ def _prepare_history_metadata(
                 item.project,
                 json.dumps(item.tags, ensure_ascii=False),
                 item.search_text,
+                item.description,
                 item.issue,
             )
             for item in metadata
@@ -118,7 +126,8 @@ def _empty_facet_groups(metadata: list) -> dict[tuple[str, str | None], dict]:
 
 def _facet_metadata_key(metadata: list, complete: bool) -> str:
     payload = [
-        item.as_dict() for item in sorted(metadata, key=lambda item: item.dag_id)
+        {**item.as_dict(), "task_ids": item.task_ids}
+        for item in sorted(metadata, key=lambda item: item.dag_id)
     ]
     return hashlib.sha256(
         json.dumps([complete, payload], ensure_ascii=False, sort_keys=True).encode(
@@ -417,7 +426,7 @@ class WebService:
                 status = states[item.dag_id]
                 if selected_tags and not selected_tags.intersection(item.tags):
                     continue
-                search_text = item.search_text
+                search_text = item.workflow_search_text
                 if not all(term in search_text for term in terms):
                     continue
                 if state == "running" and status["running_count"] <= 0:
@@ -476,7 +485,7 @@ class WebService:
             calculated_at = datetime.now(timezone.utc).isoformat()
             with sqlite3.connect(self.store.path) as connection:
                 connection.row_factory = sqlite3.Row
-                _prepare_history_metadata(connection, metadata, selected_tags)
+                _prepare_history_metadata(connection, metadata, selected_tags, terms)
                 rows = connection.execute(
                     "SELECT COALESCE(m.project_kind, 'unknown') AS project_kind, "
                     "m.project, COUNT(*) AS total, "
@@ -524,7 +533,7 @@ class WebService:
                 continue
             if selected_tags and not selected_tags.intersection(metadata.tags):
                 continue
-            search_text = metadata.search_text
+            search_text = metadata.workflow_search_text
             if not all(term in search_text for term in terms):
                 continue
             candidates.append((source, metadata))
@@ -566,6 +575,10 @@ class WebService:
                         snapshot={**states[source.dag_id], **details[source.dag_id]},
                     ),
                     **metadata.as_dict(),
+                    "matched_task_ids": [
+                        task_id for task_id in metadata.task_ids
+                        if any(term in task_id.casefold() for term in terms)
+                    ][:3],
                 }
                 for source, metadata in page
             ],
@@ -616,19 +629,35 @@ class WebService:
             metadata_error = str(exc)
         with sqlite3.connect(self.store.path) as connection:
             connection.row_factory = sqlite3.Row
-            _prepare_history_metadata(connection, metadata, selected_tags)
+            terms = search_terms(query)
+            _prepare_history_metadata(connection, metadata, selected_tags, terms)
             rows = [
                 dict(row)
                 for row in connection.execute(
                     "SELECT r.dag_id, r.run_id, r.run_type, r.state, r.logical_date, "
                     "r.queued_at, r.start_date, r.end_date, "
                     "COALESCE(m.project_kind, 'unknown') AS project_kind, "
-                    "m.project, m.tags, m.issue AS metadata_issue FROM dag_run r "
+                    "m.project, m.tags, m.description, m.issue AS metadata_issue FROM dag_run r "
                     "LEFT JOIN workflow_metadata m ON m.dag_id = r.dag_id"
                     f"{where} ORDER BY r.queued_at DESC, r.dag_id DESC, r.run_id DESC LIMIT ?",
                     tuple(params),
                 ).fetchall()
             ]
+            for row in rows[:limit]:
+                row["matched_task_ids"] = (
+                    [
+                        item[0]
+                        for item in connection.execute(
+                            "SELECT DISTINCT ti.task_id FROM task_instance ti "
+                            "WHERE ti.dag_id = ? AND ti.run_id = ? AND EXISTS "
+                            "(SELECT 1 FROM selected_search_terms s "
+                            "WHERE instr(casefold(ti.task_id), s.term) > 0) "
+                            "ORDER BY ti.task_id LIMIT 3",
+                            (row["dag_id"], row["run_id"]),
+                        )
+                    ]
+                    if terms else []
+                )
         for row in rows:
             row["tags"] = json.loads(row["tags"]) if row["tags"] else []
         return {

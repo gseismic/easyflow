@@ -1,14 +1,16 @@
 import { part, usePolling } from "../api";
 import SearchBox from "../components/SearchBox";
+import SearchContext from "../components/SearchContext";
 import Status, { formatTime } from "../components/Status";
 import useFacets from "../components/useFacets";
+import usePendingRefresh from "../components/usePendingRefresh";
 import WorkflowFilters, { appendWorkflowFilters, selectedFacetCount } from "../components/WorkflowFilters";
 import WorkflowLabels from "../components/WorkflowLabels";
 
 const states = [
   ["all", "全部"],
   ["running", "运行中"],
-  ["failed", "失败"],
+  ["failed", "最近运行失败"],
   ["paused", "已暂停"],
 ];
 const nextLabels = {
@@ -24,6 +26,7 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
   if (view.state !== "all") params.set("state", view.state);
   if (view.cursors[view.page]) params.set("cursor", view.cursors[view.page]);
   const workflows = usePolling(`/api/workflows?${params}`, 5000);
+  usePendingRefresh(workflows, workflows.data?.loading);
   const facetParams = appendWorkflowFilters(new URLSearchParams(), filters, false);
   if (view.query) facetParams.set("q", view.query);
   if (view.state !== "all") facetParams.set("state", view.state);
@@ -90,35 +93,49 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
           <span className="count">{totalLabel}</span>
         </div>
         <div className="discovery-tools">
-          <WorkflowFilters
-            catalog={overview}
-            facets={facets}
-            filters={filters}
-            onChange={onFiltersChange}
-            onReset={onReset}
-            hasOtherFilters={Boolean(view.query || view.draft || view.state !== "all")}
-            pendingSearch={pendingSearch}
-            unit="个工作流"
-          />
-          <SearchBox
-            label="搜索工作流"
-            query={view.query}
-            value={view.draft}
-            resetVersion={view.resetVersion}
-            onDraftChange={(draft) => setView((current) => ({ ...current, draft }))}
-            onSearch={(query) => {
-              if (query !== view.query) changeView({ query });
-            }}
-          />
-          <div className="filter-group" aria-label="筛选工作流状态">
-            {states.map(([value, label]) => (
-              <button
-                key={value}
-                className={view.state === value ? "filter active" : "filter"}
-                aria-pressed={view.state === value}
-                onClick={() => changeView({ state: value })}
-              >{label}</button>
-            ))}
+          <div className="search-section" role="search" aria-label="搜索工作流">
+            <span className="discovery-label">搜索</span>
+            <div className="search-content">
+              <SearchBox
+                label="搜索工作流"
+                placeholder="搜索工作流 ID、描述或任务 ID"
+                describedBy="workflow-search-help"
+                query={view.query}
+                value={view.draft}
+                resetVersion={view.resetVersion}
+                onDraftChange={(draft, draftComposing) => setView((current) => ({ ...current, draft, draftComposing }))}
+                onSearch={(query) => {
+                  if (query !== view.query) changeView({ query });
+                }}
+              />
+              <p id="workflow-search-help" className="search-help">也可搜索项目和标签；多个关键词用空格分开，需全部匹配。</p>
+            </div>
+          </div>
+          <div className="filter-section">
+            <span className="discovery-label">过滤</span>
+            <WorkflowFilters
+              catalog={overview}
+              facets={facets}
+              filters={filters}
+              onChange={onFiltersChange}
+              onReset={onReset}
+              hasOtherFilters={view.state !== "all"}
+              hasSearch={Boolean(view.query || view.draft)}
+              pendingSearch={pendingSearch}
+              resetVersion={view.filterResetVersion}
+              unit="个工作流"
+            >
+              <div className="filter-group" role="group" aria-label="过滤工作流状态">
+                {states.map(([value, label]) => (
+                  <button
+                    key={value}
+                    className={view.state === value ? "filter active" : "filter"}
+                    aria-pressed={view.state === value}
+                    onClick={() => changeView({ state: value })}
+                  >{label}</button>
+                ))}
+              </div>
+            </WorkflowFilters>
           </div>
         </div>
         {(overview.data?.loading || workflows.data?.loading) && (
@@ -128,17 +145,17 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
           <div className="empty">正在加载工作流…</div>
         ) : !workflows.data ? (
           <div className="empty">无法加载工作流，请检查服务连接。</div>
-        ) : !dags.length && workflows.data.loading ? (
+        ) : !dags.length && (workflows.data.loading || overview.data?.loading) ? (
           <div className="empty">正在解析工作流…</div>
         ) : !dags.length ? (
           <div className="empty compact">
             <span className="empty-symbol">◇</span>
-            <strong>没有匹配的工作流</strong>
-            <span>请调整搜索或筛选条件；首次使用时可将 DAG 文件放入指定目录。</span>
+            <strong>{view.query || view.state !== "all" || filters.projectKind !== "all" || filters.tags.length ? "没有匹配的工作流" : "还没有工作流"}</strong>
+            <span>{view.query || view.state !== "all" || filters.projectKind !== "all" || filters.tags.length ? "请清除搜索或调整过滤条件。" : "将 DAG 文件放入指定目录后，工作流会显示在这里。"}</span>
           </div>
         ) : (
           <div className="table-wrap">
-            <table>
+            <table className="workflow-table">
               <thead><tr>
                 <th>工作流 / 项目 / 标签</th><th>调度</th><th>下次计划</th><th>最近开始 / 入队</th><th>状态</th><th aria-label="查看详情" />
               </tr></thead>
@@ -150,6 +167,7 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
                         <span className="dag-icon">↗</span>
                         <span><strong title={dag.dag_id}>{dag.dag_id}</strong><small>{dag.task_count} 个任务 · {dag.paused ? "已暂停" : "已启用"}</small></span>
                       </a>
+                      <SearchContext item={dag} query={view.query} />
                       <WorkflowLabels item={dag} filters={filters} onChange={onFiltersChange} />
                     </td>
                     <td className="mono">{dag.schedule || "手动触发"}</td>

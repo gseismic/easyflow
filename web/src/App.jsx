@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { api, post, setCsrfToken, usePolling } from "./api";
 import SchedulerStatus from "./components/SchedulerStatus";
+import usePendingRefresh from "./components/usePendingRefresh";
 import DagList from "./pages/DagList";
 import DagDetail from "./pages/DagDetail";
 import HistoryList from "./pages/HistoryList";
 import HistoryRun from "./pages/HistoryRun";
 import Login from "./pages/Login";
+import { emptyFilters, listHref, readListState, sameFilters, workflowHref } from "./listRoute";
 
 function currentRoute() {
   const [path, query = ""] = window.location.hash.split("?", 2);
@@ -17,48 +19,140 @@ function currentRoute() {
     const dagId = params.get("dag_id");
     const runId = params.get("run_id");
     return dagId && runId
-      ? { name: "history-run", dagId, runId, backDagId: params.get("from_dag") || "" }
+      ? {
+          name: "history-run", dagId, runId,
+          backDagId: params.get("from_dag") || "",
+          fromWorkflow: params.get("from_workflow") === "1",
+          backQuery: (params.get("from_q") || "").slice(0, 1000).trim(),
+          backState: params.get("from_state") || "",
+        }
       : { name: "history" };
   }
   const match = path.match(/^#\/dags\/(.+)$/);
   try {
     return match
-      ? { name: "dag", dagId: decodeURIComponent(match[1]) }
+      ? {
+          name: "dag", dagId: decodeURIComponent(match[1]),
+          tab: ["history", "schedule", "source"].includes(new URLSearchParams(query).get("tab"))
+            ? new URLSearchParams(query).get("tab") : "run",
+        }
       : { name: "dags" };
   } catch {
     return { name: "dags" };
   }
 }
 
-const emptyFilters = () => ({ projectKind: "all", project: "", tags: [] });
+function makeView(parsed) {
+  return {
+    query: parsed.query,
+    draft: parsed.query,
+    draftComposing: false,
+    resetVersion: 0,
+    filterResetVersion: 0,
+    state: parsed.state,
+    cursors: [null],
+    page: 0,
+  };
+}
+
+function initialView(page) {
+  const currentPage = currentRoute().name;
+  return makeView(readListState(currentPage === page ? window.location.hash : "", page));
+}
 
 function Workspace({ session, onLogout }) {
   const [route, setRoute] = useState(currentRoute);
   const historyScope = useRef(route.name === "history" ? route.dagId : "");
-  const [filters, setFilters] = useState(emptyFilters);
-  const [workflowView, setWorkflowView] = useState({
-    query: "",
-    draft: "",
-    resetVersion: 0,
-    state: "all",
-    cursors: [null],
-    page: 0,
+  const [filters, setFilters] = useState(() => {
+    const page = currentRoute().name;
+    return page === "dags" || page === "history"
+      ? readListState(window.location.hash, page).filters : emptyFilters();
   });
-  const [historyView, setHistoryView] = useState({
-    query: "",
-    draft: "",
-    resetVersion: 0,
-    state: "",
-    cursors: [null],
-    page: 0,
-  });
+  const [workflowView, setWorkflowView] = useState(() => initialView("dags"));
+  const [historyView, setHistoryView] = useState(() => initialView("history"));
+  const [dagHistory, setDagHistory] = useState(() => ({
+    dagId: route.name === "dag" ? route.dagId : "",
+    view: makeView(readListState(
+      route.name === "dag" && route.tab === "history" ? window.location.hash : "",
+      "history",
+    )),
+  }));
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
   const [logoutError, setLogoutError] = useState("");
   const overview = usePolling("/api/catalog", 5000);
+  usePendingRefresh(overview, overview.data?.loading);
   useEffect(() => {
-    const update = () => setRoute(currentRoute());
+    const update = () => {
+      const nextRoute = currentRoute();
+      if (nextRoute.name === "dags" || nextRoute.name === "history") {
+        const parsed = readListState(window.location.hash, nextRoute.name);
+        const filtersChanged = !sameFilters(filtersRef.current, parsed.filters);
+        setFilters(parsed.filters);
+        if (filtersChanged) {
+          const setOtherView = nextRoute.name === "history" ? setWorkflowView : setHistoryView;
+          setOtherView((current) => ({ ...current, cursors: [null], page: 0 }));
+        }
+        const setView = nextRoute.name === "history" ? setHistoryView : setWorkflowView;
+        setView((current) => {
+          const queryChanged = current.query !== parsed.query;
+          const changed = queryChanged || current.state !== parsed.state || filtersChanged;
+          if (!changed && current.draft === parsed.query && !current.draftComposing) return current;
+          return {
+            ...current,
+            query: parsed.query,
+            draft: parsed.query,
+            draftComposing: false,
+            state: parsed.state,
+            resetVersion: current.resetVersion + (queryChanged ? 1 : 0),
+            filterResetVersion: current.filterResetVersion + (filtersChanged ? 1 : 0),
+            ...(changed ? { cursors: [null], page: 0 } : {}),
+          };
+        });
+      }
+      if (nextRoute.name === "dag" && nextRoute.tab === "history") {
+        const parsed = readListState(window.location.hash, "history");
+        setDagHistory((current) => {
+          if (current.dagId !== nextRoute.dagId) {
+            return { dagId: nextRoute.dagId, view: makeView(parsed) };
+          }
+          const view = current.view;
+          const changed = view.query !== parsed.query || view.state !== parsed.state;
+          if (!changed && view.draft === parsed.query && !view.draftComposing) return current;
+          return {
+            ...current,
+            view: {
+              ...view, query: parsed.query, draft: parsed.query, draftComposing: false,
+              state: parsed.state, resetVersion: view.resetVersion + (view.query !== parsed.query ? 1 : 0),
+              ...(changed ? { cursors: [null], page: 0 } : {}),
+            },
+          };
+        });
+      }
+      setRoute(nextRoute);
+    };
     window.addEventListener("hashchange", update);
     return () => window.removeEventListener("hashchange", update);
   }, []);
+  useEffect(() => {
+    if (route.name !== "dags" && route.name !== "history") return;
+    const actual = currentRoute();
+    if (actual.name !== route.name || (route.name === "history" && actual.dagId !== route.dagId)) return;
+    const view = route.name === "history" ? historyView : workflowView;
+    const href = listHref(route.name, filters, view, route.dagId);
+    if (window.location.hash !== href) window.history.replaceState(null, "", href);
+  }, [
+    route, filters,
+    workflowView.query, workflowView.draft, workflowView.draftComposing, workflowView.state,
+    historyView.query, historyView.draft, historyView.draftComposing, historyView.state,
+  ]);
+  useEffect(() => {
+    if (route.name !== "dag" || route.tab !== "history" || dagHistory.dagId !== route.dagId) return;
+    const actual = currentRoute();
+    if (actual.name !== "dag" || actual.dagId !== route.dagId || actual.tab !== "history") return;
+    const href = workflowHref(route.dagId, "history", dagHistory.view);
+    if (window.location.hash !== href) window.history.replaceState(null, "", href);
+  }, [route, dagHistory]);
   useEffect(() => {
     if (route.name !== "history") return;
     const scope = route.dagId || "";
@@ -85,25 +179,36 @@ function Workspace({ session, onLogout }) {
     setWorkflowView((current) => ({
       ...current,
       ...(page === "dags" ? {
-        query: "", draft: "", state: "all", resetVersion: current.resetVersion + 1,
+        state: "all", filterResetVersion: current.filterResetVersion + 1,
       } : {}),
       cursors: [null], page: 0,
     }));
     setHistoryView((current) => ({
       ...current,
       ...(page === "history" ? {
-        query: "", draft: "", state: "", resetVersion: current.resetVersion + 1,
+        state: "", filterResetVersion: current.filterResetVersion + 1,
       } : {}),
       cursors: [null], page: 0,
     }));
     if (page === "history" && route.name === "history" && route.dagId) {
-      window.location.hash = "#/history";
+      const href = listHref("history", emptyFilters(), { ...historyView, state: "" });
+      window.history.replaceState(null, "", href);
+      setRoute(currentRoute());
     }
   };
+  const dagHistoryView = dagHistory.dagId === route.dagId
+    ? dagHistory.view : makeView(readListState("", "history"));
+  const setDagHistoryView = (update) => setDagHistory((current) => {
+    const view = current.dagId === route.dagId
+      ? current.view : makeView(readListState("", "history"));
+    return { dagId: route.dagId, view: typeof update === "function" ? update(view) : update };
+  });
+  const workflowsHref = listHref("dags", filters, workflowView);
+  const historyHref = listHref("history", filters, historyView);
   return (
     <>
       <header className="topbar">
-        <a href="#/" className="brand" aria-label="easyflow 首页">
+        <a href={workflowsHref} className="brand" aria-label="easyflow 首页">
           <span className="brand-mark">
             e<span>·</span>
           </span>
@@ -112,14 +217,14 @@ function Workspace({ session, onLogout }) {
         <span className="header-divider" />
         <nav className="main-nav" aria-label="主导航">
           <a
-            href="#/"
-            aria-current={["dags", "dag"].includes(route.name) ? "page" : undefined}
+            href={workflowsHref}
+            aria-current={(["dags", "dag"].includes(route.name) || route.fromWorkflow) ? "page" : undefined}
           >
             工作流
           </a>
           <a
-            href="#/history"
-            aria-current={route.name.startsWith("history") ? "page" : undefined}
+            href={historyHref}
+            aria-current={route.name.startsWith("history") && !route.fromWorkflow ? "page" : undefined}
           >
             运行历史
           </a>
@@ -146,7 +251,10 @@ function Workspace({ session, onLogout }) {
           dagId={route.dagId}
           refreshOverview={overview.refresh}
           isAdmin={session.role === "admin"}
-          onViewAllRuns={() => resetFilters("history")}
+          tab={route.tab}
+          historyView={dagHistoryView}
+          setHistoryView={setDagHistoryView}
+          backHref={workflowsHref}
         />
       ) : route.name === "history" ? (
         <HistoryList
@@ -157,13 +265,17 @@ function Workspace({ session, onLogout }) {
           onReset={() => resetFilters("history")}
           dagId={route.dagId}
           catalog={overview}
+          allRunsHref={historyHref}
         />
       ) : route.name === "history-run" ? (
         <HistoryRun
           key={JSON.stringify([route.dagId, route.runId])}
           dagId={route.dagId}
           runId={route.runId}
-          backDagId={route.backDagId}
+          backHref={route.fromWorkflow
+            ? workflowHref(route.dagId, "history", { query: route.backQuery, state: route.backState })
+            : listHref("history", filters, historyView, route.backDagId)}
+          backLabel={route.fromWorkflow ? "返回工作流运行历史" : undefined}
         />
       ) : (
         <DagList

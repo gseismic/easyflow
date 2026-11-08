@@ -927,8 +927,14 @@ tbody tr:hover {
   gap: 24px;
   margin: 28px 0 20px;
   border-bottom: 1px solid var(--border);
+  overflow-x: auto;
 }
 .detail-tab {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
   min-height: 44px;
   padding: 0 2px;
   border: 0;
@@ -937,6 +943,7 @@ tbody tr:hover {
   color: #607568;
   font-size: 13px;
   font-weight: 600;
+  white-space: nowrap;
 }
 .detail-tab.active {
   color: #175f42;
@@ -1116,17 +1123,79 @@ tbody tr:hover {
   overflow: visible;
 }
 .discovery-tools {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
   padding: 0 28px 20px;
 }
+.search-section,
+.filter-section {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+.discovery-label {
+  padding-top: 13px;
+  color: #354e3e;
+  font-size: 13px;
+  font-weight: 700;
+}
+.search-content {
+  width: min(100%, 680px);
+}
+.search-help {
+  margin: 8px 0 0;
+  color: #607568;
+  font-size: 12px;
+  line-height: 1.5;
+}
 .workflow-filters {
+  min-width: 0;
+}
+.filter-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+.active-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: #607568;
+  font-size: 12px;
+}
+.active-filter {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 4px 10px;
+  border: 1px solid #cddfd2;
+  border-radius: 8px;
+  background: #f3f8f4;
+  color: #175f42;
+  text-align: left;
+}
+.active-filter .filter-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.active-filter .filter-remove {
+  flex: none;
+  margin-left: 4px;
+  font-size: 16px;
+}
+.clear-filters {
+  min-height: 44px;
+  white-space: nowrap;
 }
 .project-filter {
   display: inline-flex;
@@ -1214,7 +1283,8 @@ tbody tr:hover {
   margin: 8px 0 0;
 }
 .facet-note {
-  white-space: nowrap;
+  display: inline-block;
+  margin-top: 4px;
 }
 .tag-options label {
   display: flex;
@@ -1231,13 +1301,13 @@ tbody tr:hover {
   font-size: 12px;
 }
 .search-live {
-  flex: 1 1 260px;
-  width: auto;
-  max-width: 420px;
+  width: 100%;
+  max-width: none;
   padding-right: 0;
 }
 .search-live input {
   min-width: 0;
+  min-height: 44px;
 }
 .search-clear {
   flex: none;
@@ -1247,6 +1317,27 @@ tbody tr:hover {
   background: transparent;
   color: #607568;
   font-size: 20px;
+}
+.search-clear.is-hidden {
+  visibility: hidden;
+}
+.search-context {
+  max-width: 280px;
+  margin: 8px 0;
+  white-space: normal;
+}
+.workflow-description,
+.matched-tasks {
+  display: block;
+  color: #536c5c;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.search-context mark {
+  color: inherit;
+  background: #e6f1cf;
+  border-radius: 2px;
 }
 .workflow-labels {
   display: flex;
@@ -1314,6 +1405,20 @@ tbody tr:hover {
 }
 .history-card {
   margin-top: 32px;
+}
+.workflow-history {
+  margin-top: 0;
+}
+.workflow-history-notice {
+  margin: 0 28px 20px;
+}
+.workflow-history-table .history-run-link {
+  min-height: 44px;
+  line-height: 44px;
+}
+.workflow-history-table .row-arrow {
+  width: 44px;
+  height: 44px;
 }
 .history-search {
   display: flex;
@@ -1416,6 +1521,15 @@ tbody tr:hover {
   .discovery-tools {
     padding: 0 20px 20px;
   }
+  .search-section,
+  .filter-section {
+    display: block;
+  }
+  .discovery-label {
+    display: block;
+    padding-top: 0;
+    margin-bottom: 8px;
+  }
   .workflow-filters {
     position: relative;
     width: 100%;
@@ -1439,13 +1553,56 @@ tbody tr:hover {
   }
   .project-label,
   .tag-label {
-    min-height: 36px;
+    min-height: 44px;
   }
   .history-pagination {
     padding: 16px 20px;
   }
   .history-pagination > div {
     gap: 8px;
+  }
+  .workflow-table,
+  .workflow-table tbody {
+    display: block;
+  }
+  .workflow-table thead {
+    display: none;
+  }
+  .workflow-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 8px 12px;
+    padding: 16px 20px;
+    border-top: 1px solid #edf1ee;
+  }
+  .workflow-table td {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .workflow-table td:nth-child(1) { grid-area: 1 / 1; }
+  .workflow-table td:nth-child(2) { grid-area: 2 / 1; }
+  .workflow-table td:nth-child(3) { grid-area: 3 / 1; }
+  .workflow-table td:nth-child(4) { grid-area: 4 / 1; }
+  .workflow-table td:nth-child(5) { grid-area: 1 / 2; }
+  .workflow-table td:nth-child(6) { grid-area: 2 / 2; justify-self: end; }
+  .workflow-table td:nth-child(2)::before { content: "调度："; }
+  .workflow-table td:nth-child(3)::before { content: "下次计划："; }
+  .workflow-table td:nth-child(4)::before { content: "最近："; }
+  .workflow-table .dag-link {
+    min-width: 0;
+    min-height: 44px;
+    max-width: 100%;
+  }
+  .workflow-table .dag-link > span:last-child {
+    min-width: 0;
+  }
+  .workflow-table .dag-link strong {
+    max-width: 100%;
+    white-space: nowrap;
   }
   .history-table,
   .history-table tbody {

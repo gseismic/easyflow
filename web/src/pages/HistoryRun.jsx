@@ -5,7 +5,7 @@ import Status from "../components/Status";
 import TaskDetails from "../components/TaskDetails";
 import TaskLog from "../components/TaskLog";
 
-export default function HistoryRun({ dagId, runId, backDagId }) {
+export default function HistoryRun({ dagId, runId, backHref, backLabel = "返回运行历史" }) {
   const [taskId, setTaskId] = useState("");
   const [attempt, setAttempt] = useState("");
   const identity = new URLSearchParams({ dag_id: dagId, run_id: runId });
@@ -29,8 +29,8 @@ export default function HistoryRun({ dagId, runId, backDagId }) {
     (taskId ? { task_id: taskId } : null);
   return (
     <main className="page detail-page">
-      <a className="back-link" href={backDagId ? `#/history?dag_id=${part(backDagId)}` : "#/history"}>
-        ← 返回运行历史
+      <a className="back-link" href={backHref}>
+        ← {backLabel}
       </a>
       <div className="detail-heading">
         <div>

@@ -7,9 +7,11 @@ export default function SearchBox({
   onSearch,
   resetVersion,
   label,
+  describedBy,
   placeholder = "搜索工作流、项目或标签",
 }) {
   const [composing, setComposing] = useState(false);
+  const inputRef = useRef(null);
   const current = useRef({ query, value, onDraftChange, onSearch, composing: false });
   current.current = { query, value, onDraftChange, onSearch, composing: current.current.composing };
 
@@ -30,7 +32,7 @@ export default function SearchBox({
   useEffect(() => () => {
     const draft = current.current;
     if (draft.composing) {
-      if (draft.value !== draft.query) draft.onDraftChange(draft.query);
+      draft.onDraftChange(draft.query, false);
       return;
     }
     const next = draft.value.trim();
@@ -41,41 +43,51 @@ export default function SearchBox({
     <div className="search-box search-live">
       <span aria-hidden="true">⌕</span>
       <input
+        ref={inputRef}
         aria-label={label}
+        aria-describedby={describedBy}
         placeholder={placeholder}
         maxLength={1000}
         value={value}
         onChange={(event) => {
           current.current.value = event.target.value;
-          onDraftChange(event.target.value);
+          onDraftChange(event.target.value, current.current.composing);
         }}
-        onCompositionStart={() => {
+        onCompositionStart={(event) => {
           current.current.composing = true;
           setComposing(true);
+          onDraftChange(event.currentTarget.value, true);
         }}
         onCompositionEnd={(event) => {
           current.current.value = event.currentTarget.value;
           current.current.composing = false;
-          onDraftChange(event.currentTarget.value);
+          onDraftChange(event.currentTarget.value, false);
           setComposing(false);
         }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !current.current.composing && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            const next = event.currentTarget.value.trim();
+            if (next !== current.current.query) current.current.onSearch(next);
+          }
+        }}
       />
-      {value && (
-        <button
-          type="button"
-          className="search-clear"
-          aria-label="清空搜索"
-          onClick={() => {
-            current.current.value = "";
-            current.current.composing = false;
-            onDraftChange("");
-            setComposing(false);
-            if (current.current.query) current.current.onSearch("");
-          }}
-        >
-          ×
-        </button>
-      )}
+      <button
+        type="button"
+        className={value ? "search-clear" : "search-clear is-hidden"}
+        aria-label="清空搜索"
+        disabled={!value}
+        onClick={() => {
+          current.current.value = "";
+          current.current.composing = false;
+          onDraftChange("", false);
+          setComposing(false);
+          if (current.current.query) current.current.onSearch("");
+          inputRef.current?.focus();
+        }}
+      >
+        ×
+      </button>
     </div>
   );
 }
