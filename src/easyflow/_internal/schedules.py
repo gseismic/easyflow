@@ -82,6 +82,14 @@ def scheduler_intervals(
 
     if last is not None:
         first = next_logical_date(schedule, last)
+        if dag.start_date is not None:
+            start = dag.start_date.astimezone(now.tzinfo)
+            if _utc(first) < _utc(start):
+                first = (
+                    start
+                    if isinstance(schedule, timedelta)
+                    else cron_next_at_or_after(_expression(schedule), start)
+                )
     elif dag.start_date is not None:
         first = (
             dag.start_date.astimezone(now.tzinfo)

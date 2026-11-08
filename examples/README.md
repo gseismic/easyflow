@@ -2,6 +2,8 @@
 
 这些示例覆盖 easyflow 和 Airflow 3.2 的常用交集。每个 `.py` 都是独立的 DAG 文件，默认使用 easyflow；在 Airflow 环境中运行时设置 `EASYFLOW_EXAMPLE_ENGINE=airflow`。Airflow 的 DAG 解析进程和任务执行进程都需要这个设置，即使两个引擎安装在同一个环境中也应明确选择。示例不需要业务数据库、网络服务等外部业务依赖；调度引擎仍需自己的状态库，量化示例还会写本地文件。
 
+`301_operator_bash.py` 需要系统安装 Bash；其他示例不依赖 Bash。项目安装时会提供 `tzdata`，供缺少系统时区数据库的环境解析 IANA 时区。
+
 文件采用分级编号：大类编号 1 位、类内序号 2 位，例如 `201` 表示大类 `2` 的第 `01` 个示例。DAG ID 是独立标识，不随文件名推导。
 
 | 文件 | DAG ID | 场景 |
@@ -71,7 +73,7 @@ airflow_example dags test example_taskflow_etl 2026-07-03T00:00:00+00:00 \
 - Airflow 3.2 的部分手动触发方式默认没有逻辑日期；easyflow 当前为手动运行提供逻辑日期。`example_daily_schedule` 会显示“未提供”。量化示例在没有逻辑日期时要求手动输入 `trade_date`，例如 `{"trade_date":"2026-07-01"}`；在两个引擎都可显式传入它以指定同一天的数据。
 - 用 `dags test` 指定量化示例的逻辑日期时，日期应不早于其 `start_date`；否则 easyflow 当前仍执行任务，Airflow 3.2 则可能得到没有任务实际执行的成功运行。测试时应核对任务状态或输出文件。已确认的差异见 [KI-20261108-1637-001](../docs/known-issues/KI-20261108-1637-001-test-before-start-date.md)。`trade_date` 是业务日期，可早于逻辑日期和 `start_date`。
 - 量化示例指定 `trade_date` 时，业务窗口是该 UTC 日期的 `[00:00, 次日 00:00)`；没有指定时，以运行逻辑时间为结束计算前 24 小时。它是示例定义的业务窗口，不假定 Airflow 不同 timetable 的数据区间相同。
-- 量化示例默认写入 `./data/prices/symbol=DEMO/date=日期/data.json`。相同日期重跑会替换该文件；可在运行参数中指定独立的绝对 `data_root`，并确认 Airflow 任务进程有写入权限。
+- 量化示例默认写入 `./data/prices/symbol=DEMO/date=日期/data.json`。相同日期重跑会替换该文件；并发写入使用各自的临时文件，最终文件以最后一次替换为准。可在运行参数中指定独立的绝对 `data_root`，并确认 Airflow 任务进程有写入权限。
 - 原量化示例已更名但保留 `quant_daily_prices` ID。已有运行记录仍可查看；由于 easyflow 会检查已创建运行对应的源码，旧运行清理后重跑可能被阻止，请使用更新后的 DAG 创建新运行。
 
 参考：[Airflow 3.2 TaskFlow 教程](https://airflow.apache.org/docs/apache-airflow/3.2.0/tutorial/taskflow.html)、[基础教程](https://airflow.apache.org/docs/apache-airflow/3.2.0/tutorial/fundamentals.html)、[Timetables](https://airflow.apache.org/docs/apache-airflow/3.2.0/authoring-and-scheduling/timetable.html)、[3.2 发布说明中的手动运行语义](https://airflow.apache.org/docs/apache-airflow/3.2.0/release_notes.html)。

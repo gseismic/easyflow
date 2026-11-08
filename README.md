@@ -41,11 +41,11 @@ with DAG("example", schedule="@daily") as dag:
 所有命令可加 `--help` 查看选项：
 
 ```bash
-# 发现并在内存中测试 DAG，不创建持久化运行
+# 发现并在内存中测试 DAG；任务会实际执行，以下示例不写业务文件
 uv run easyflow dags list --dags-folder examples
-uv run easyflow dags test quant_daily_prices --file examples/501_quant_daily_prices.py
+uv run easyflow dags test example_taskflow_etl --file examples/002_basic_taskflow_etl.py
 
-# 手动触发；可通过 --logical-date 指定带时区的 ISO 时间
+# 手动触发量化示例会写入本地文件；可通过 --logical-date 指定带时区的 ISO 时间
 uv run easyflow dags trigger quant_daily_prices --file examples/501_quant_daily_prices.py
 
 # 单独运行 scheduler；--parallelism 是此状态库的实例级任务上限
@@ -68,7 +68,7 @@ uv run easyflow tasks clear quant_daily_prices --run-id RUN_ID --task-id TASK_ID
 
 DAG 暂停状态会持久化。暂停时仍可以创建手动运行，但运行排队等待恢复；已运行任务允许完成。Web 创建或清理运行后由 scheduler 继续执行；scheduler 不在线时界面会提示。`dags trigger` 命令同步等待执行，暂停时返回排队状态及非零退出码。
 
-停止 `easyflow web` 会同时停止由它启动的 scheduler；正在执行的本地任务可能中断，重启后按租约与重试策略恢复。已单独启动、由 Web 复用的 scheduler 不受影响。
+交互运行时使用 `Ctrl+C`（`SIGINT`）会停止 Web 自行启动的 scheduler；正在执行的本地任务可能中断，重启后按租约与重试策略恢复。向 Web 进程发送 `SIGTERM` 可能留下仍在运行的 scheduler，详见 [已知问题](docs/known-issues/KI-20261108-1718-001-web-sigterm-orphan-scheduler.md)。已单独启动、由 Web 复用的 scheduler 不受 Web 停止控制。
 
 回补支持 `none`、`failed`、`completed` 重处理策略和 `--max-active-runs`。回补并发上限独立于 DAG 普通运行的 `max_active_runs`，但仍受实例任务并发上限约束；不指定回补上限时按一次一个运行执行。预览反映查询时的状态，实际创建时会重新检查。容量或依赖阻塞时，命令报告未完成日期，已创建的运行可由 scheduler 继续；对尚未创建的日期可再次执行回补。
 

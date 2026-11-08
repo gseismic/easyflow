@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
@@ -40,7 +41,6 @@ with DAG(
         ds = interval_start.date().isoformat()
         data_root = Path(context["params"]["data_root"])
         partition = data_root / f"symbol={symbol}" / f"date={ds}"
-        temp_file = partition / "data.tmp"
         final_file = partition / "data.json"
         partition.mkdir(parents=True, exist_ok=True)
 
@@ -52,8 +52,17 @@ with DAG(
             "logical_date": logical_date.isoformat() if logical_date else None,
             "rows": [{"close": 100.0}],
         }
-        temp_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        temp_file.replace(final_file)
+        temp_file = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=partition, prefix="data-", suffix=".tmp", delete=False
+            ) as handle:
+                temp_file = Path(handle.name)
+                json.dump(payload, handle, ensure_ascii=False)
+            temp_file.replace(final_file)
+        finally:
+            if temp_file is not None:
+                temp_file.unlink(missing_ok=True)
         return {
             "path": str(final_file),
             "row_count": len(payload["rows"]),

@@ -4,6 +4,8 @@ import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from easyflow._internal.cron import cron_next_after, cron_previous_before
 from easyflow._internal.dag_parser import load_dag_from_file
 from easyflow._internal.persistent_runner import PersistentDagRunner
@@ -70,6 +72,67 @@ def test_boundaries_are_not_floored_before_start_and_stop_at_end():
     ]
     dag.catchup = False
     assert scheduler_intervals(dag, datetime(2026, 7, 10, tzinfo=UTC)) == []
+
+
+@pytest.mark.parametrize("catchup", [False, True])
+def test_cron_history_respects_a_later_start_date(catchup):
+    last = datetime(2026, 11, 7, tzinfo=UTC)
+    start = datetime(2026, 11, 8, 8, tzinfo=UTC)
+    dag = DAG("moved_start", schedule="@daily", start_date=start, catchup=catchup)
+    assert scheduler_intervals(
+        dag, datetime(2026, 11, 8, 9, tzinfo=UTC), last_automated_date=last
+    ) == []
+    next_tick = datetime(2026, 11, 9, tzinfo=UTC)
+    assert [
+        item.logical_date
+        for item in scheduler_intervals(dag, next_tick, last_automated_date=last)
+    ] == [next_tick]
+    assert [
+        item.logical_date
+        for item in scheduler_intervals(
+            dag, next_tick + timedelta(days=1), last_automated_date=next_tick
+        )
+    ] == [next_tick + timedelta(days=1)]
+
+
+@pytest.mark.parametrize("catchup", [False, True])
+def test_timedelta_history_respects_a_later_start_date(catchup):
+    last = datetime(2026, 11, 7, tzinfo=UTC)
+    start = datetime(2026, 11, 8, 8, tzinfo=UTC)
+    dag = DAG(
+        "moved_delta_start",
+        schedule=timedelta(days=1),
+        start_date=start,
+        catchup=catchup,
+    )
+    assert scheduler_intervals(
+        dag, start - timedelta(minutes=1), last_automated_date=last
+    ) == []
+    assert [
+        item.logical_date
+        for item in scheduler_intervals(dag, start, last_automated_date=last)
+    ] == [start]
+    later = start + timedelta(days=2, hours=1)
+    expected = [start, start + timedelta(days=1), start + timedelta(days=2)]
+    if not catchup:
+        expected = [later]
+    assert [
+        item.logical_date
+        for item in scheduler_intervals(dag, later, last_automated_date=last)
+    ] == expected
+
+
+def test_history_start_boundary_uses_actual_instant_in_dst_fold():
+    zone = ZoneInfo("America/New_York")
+    last = datetime(2026, 11, 1, 1, 0, tzinfo=zone, fold=0)
+    start = datetime(2026, 11, 1, 1, 0, tzinfo=zone, fold=1)
+    dag = DAG("fold_start", schedule="0,30 1 * * *", start_date=start, catchup=True)
+    before_start = datetime(2026, 11, 1, 1, 45, tzinfo=zone, fold=0)
+    assert scheduler_intervals(dag, before_start, last_automated_date=last) == []
+    intervals = scheduler_intervals(dag, start, last_automated_date=last)
+    assert [item.logical_date.astimezone(UTC) for item in intervals] == [
+        start.astimezone(UTC)
+    ]
 
 
 def test_cron_without_start_date_waits_until_near_next_tick():

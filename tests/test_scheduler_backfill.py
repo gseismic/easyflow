@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
+import pytest
+
 from easyflow._internal.dag_parser import load_dag_from_file
 from easyflow._internal.persistent_runner import PersistentDagRunner
 from easyflow._internal.scheduler import create_backfill, run_scheduler_once
@@ -53,6 +55,65 @@ with DAG("daily_job", schedule="@daily", start_date=datetime(2026, 7, 1, tzinfo=
     assert second == []
     assert marker.read_text() == "2026-07-08"
     assert store.count_dag_runs(dag_id="daily_job", run_type="scheduled") == 1
+
+
+@pytest.mark.parametrize("catchup", [False, True])
+def test_scheduler_preserves_existing_data_when_start_date_moves_forward(
+    tmp_path, catchup
+) -> None:
+    dag_file = tmp_path / "upgraded_dag.py"
+    output = tmp_path / "existing.txt"
+    source = f"""
+from datetime import datetime, timezone
+from pathlib import Path
+from easyflow.sdk import DAG, get_current_context, task
+
+with DAG("upgraded", schedule="@daily", catchup={catchup},
+         start_date=datetime(2026, 11, 7, tzinfo=timezone.utc)) as dag:
+    @task
+    def write_output():
+        Path({str(output)!r}).write_text(get_current_context()["ds"])
+    write_output()
+"""
+    dag_file.write_text(source, encoding="utf-8")
+    store = SQLiteStateStore(f"sqlite:///{tmp_path / 'state.db'}")
+    old_run = run_scheduler_once(
+        dag_id="upgraded",
+        file_path=dag_file,
+        store=store,
+        now=datetime(2026, 11, 7, tzinfo=timezone.utc),
+        log_root=tmp_path / "logs",
+    )
+    assert len(old_run) == 1 and old_run[0].state.value == "success"
+    output.write_text("用户已有数据", encoding="utf-8")
+    dag_file.write_text(
+        source.replace(
+            "datetime(2026, 11, 7, tzinfo=timezone.utc)",
+            "datetime(2026, 11, 8, 8, tzinfo=timezone.utc)",
+        ),
+        encoding="utf-8",
+    )
+
+    early = run_scheduler_once(
+        dag_id="upgraded",
+        file_path=dag_file,
+        store=store,
+        now=datetime(2026, 11, 8, 9, tzinfo=timezone.utc),
+        log_root=tmp_path / "logs",
+    )
+    assert early == []
+    assert store.count_dag_runs(dag_id="upgraded", run_type="scheduled") == 1
+    assert output.read_text(encoding="utf-8") == "用户已有数据"
+
+    next_run = run_scheduler_once(
+        dag_id="upgraded",
+        file_path=dag_file,
+        store=store,
+        now=datetime(2026, 11, 9, tzinfo=timezone.utc),
+        log_root=tmp_path / "logs",
+    )
+    assert len(next_run) == 1 and next_run[0].state.value == "success"
+    assert output.read_text(encoding="utf-8") == "2026-11-09"
 
 
 def test_scheduler_respects_max_active_runs(tmp_path) -> None:

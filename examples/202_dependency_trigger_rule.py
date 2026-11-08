@@ -4,13 +4,12 @@ import os
 from datetime import datetime, timezone
 
 if os.environ.get("EASYFLOW_EXAMPLE_ENGINE") == "airflow":
-    from airflow.providers.standard.operators.bash import BashOperator
+    from airflow.exceptions import AirflowSkipException
     from airflow.providers.standard.operators.empty import EmptyOperator
-    from airflow.sdk import DAG
+    from airflow.sdk import DAG, task
 else:
-    from easyflow.providers.standard.operators.bash import BashOperator
     from easyflow.providers.standard.operators.empty import EmptyOperator
-    from easyflow.sdk import DAG
+    from easyflow.sdk import DAG, AirflowSkipException, task
 
 
 with DAG(
@@ -20,7 +19,12 @@ with DAG(
     catchup=False,
     tags=["example", "dependency"],
 ) as dag:
-    skipped = BashOperator(task_id="skip", bash_command="exit 99")
+
+    @task
+    def skip() -> None:
+        raise AirflowSkipException("演示跳过")
+
+    skipped = skip()
     on_success = EmptyOperator(task_id="only_on_success")
     always = EmptyOperator(task_id="after_completion", trigger_rule="all_done")
     skipped >> [on_success, always]
