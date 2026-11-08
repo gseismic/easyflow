@@ -23,3 +23,5 @@
 - 2026-11-08 23:15 Asia/Shanghai：[搜索与过滤体验补充验证](PLAN-20261108-008-model-unknown-search-filter-ux-OUTCOME.md)，优化移动端点击区域和超长名称，并更新本机静态资源。
 - 2026-11-08 23:36 Asia/Shanghai：[工作流详情内的运行历史计划](PLAN-20261108-009-model-unknown-workflow-run-history.md)，进行中。
 - 2026-11-08 23:45 Asia/Shanghai：[工作流详情内的运行历史结果](PLAN-20261108-009-model-unknown-workflow-run-history-OUTCOME.md)，实施并验证完成；本机静态入口已更新。
+- 2026-11-09 01:26 Asia/Shanghai：[easyflow-usage Skill 计划](PLAN-20261109-001-model-unknown-easyflow-usage-skill.md)，进行中。
+- 2026-11-09 01:32 Asia/Shanghai：[easyflow-usage Skill 结果](PLAN-20261109-001-model-unknown-easyflow-usage-skill-OUTCOME.md)，已完成；示例、隔离运行和 38 项相关测试通过。
