@@ -101,6 +101,12 @@ WHERE run_type = 'backfill';
 CREATE INDEX IF NOT EXISTS ix_dag_run_history
 ON dag_run(queued_at DESC, dag_id DESC, run_id DESC);
 
+CREATE INDEX IF NOT EXISTS ix_dag_run_dag_queued
+ON dag_run(dag_id, queued_at DESC);
+
+CREATE INDEX IF NOT EXISTS ix_dag_run_dag_state
+ON dag_run(dag_id, state);
+
 CREATE TABLE IF NOT EXISTS task_instance (
     dag_id TEXT NOT NULL,
     run_id TEXT NOT NULL,

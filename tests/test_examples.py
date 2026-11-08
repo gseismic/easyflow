@@ -30,6 +30,18 @@ CASES = [
         {"count": 3, "total": 55},
     ),
     (
+        "003_basic_project_quant.py",
+        "example_project_quant",
+        "preview_prices",
+        "量化行情示例",
+    ),
+    (
+        "004_basic_project_analytics.py",
+        "example_project_analytics",
+        "preview_report",
+        "分析日报示例",
+    ),
+    (
         "101_schedule_daily.py",
         "example_daily_schedule",
         "show_logical_date",

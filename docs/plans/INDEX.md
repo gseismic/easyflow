@@ -13,3 +13,8 @@
 - 2026-11-08 18:08 Asia/Shanghai：[强制认证与简洁工作流界面结果](PLAN-20261108-004-model-unknown-auth-dashboard-OUTCOME.md)，已实施并完成全量测试、浏览器与打包验证。
 - 2026-11-08 18:19 Asia/Shanghai：[全部运行历史栏目计划](PLAN-20261108-005-model-unknown-run-history.md)，进行中。
 - 2026-11-08 18:37 Asia/Shanghai：[全部运行历史栏目结果](PLAN-20261108-005-model-unknown-run-history-OUTCOME.md)，已实施并通过全量测试、浏览器与真实服务验证。
+- 2026-11-08 19:36 Asia/Shanghai：[项目、标签与即时搜索计划](PLAN-20261108-006-model-unknown-project-search.md)，进行中。
+- 2026-11-08 20:03 Asia/Shanghai：[项目、标签与即时搜索结果](PLAN-20261108-006-model-unknown-project-search-OUTCOME.md)，已实施并通过全量测试、浏览器、规模和实际服务验证；结果记录完成时的 WORKTREE，提交信息见 Git 记录。
+- 2026-11-08 20:22 Asia/Shanghai：[标签批量选择、项目统计与历史入口计划](PLAN-20261108-007-model-unknown-filter-counts.md)，进行中。
+- 2026-11-08 20:48 Asia/Shanghai：[标签批量选择、项目统计与历史入口结果](PLAN-20261108-007-model-unknown-filter-counts-OUTCOME.md)，已实施并通过全量测试、隔离浏览器、规模和实际服务验证；结果记录完成时的 WORKTREE，提交信息见 Git 记录。
+- 2026-11-08 21:40 Asia/Shanghai：[标签筛选交互补充结果](PLAN-20261108-007-model-unknown-filter-counts-OUTCOME.md)，点击外部和按 `Esc` 可收起标签面板，已完成构建与浏览器验证。

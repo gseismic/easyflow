@@ -13,10 +13,39 @@ def history(
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     cursor: Annotated[str | None, Query(max_length=32768)] = None,
     dag: Annotated[str | None, Query(max_length=1000)] = None,
+    dag_id: str | None = None,
+    q: Annotated[str | None, Query(max_length=1000)] = None,
+    project_kind: Literal[
+        "all", "project", "unassigned", "conflict", "unknown"
+    ] = "all",
+    project: str | None = None,
+    tag: Annotated[list[str] | None, Query()] = None,
     state: Literal["queued", "running", "success", "failed"] | None = None,
 ):
     return request.app.state.service.history(
-        limit=limit, cursor=cursor, dag=dag, state=state
+        limit=limit,
+        cursor=cursor,
+        dag=dag,
+        dag_id=dag_id,
+        state=state,
+        query=q,
+        project_kind=project_kind,
+        project=project,
+        tags=tag or [],
+    )
+
+
+@router.get("/runs/facets")
+def history_facets(
+    request: Request,
+    dag: Annotated[str | None, Query(max_length=1000)] = None,
+    dag_id: str | None = None,
+    q: Annotated[str | None, Query(max_length=1000)] = None,
+    tag: Annotated[list[str] | None, Query()] = None,
+    state: Literal["queued", "running", "success", "failed"] | None = None,
+):
+    return request.app.state.service.history_facets(
+        dag=dag, dag_id=dag_id, query=q, tags=tag or [], state=state
     )
 
 

@@ -18,7 +18,7 @@ const runStates = {
   failed: "失败",
 };
 
-export default function DagDetail({ dagId, refreshOverview, isAdmin }) {
+export default function DagDetail({ dagId, refreshOverview, isAdmin, onViewAllRuns }) {
   const base = `/api/dags/${part(dagId)}`;
   const detail = usePolling(base);
   const [runId, setRunId] = useState("");
@@ -200,14 +200,16 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin }) {
                 <h2>运行记录</h2>
                 <p>最近 100 次 · 时间显示为浏览器本地时区</p>
               </div>
-              {isAdmin && (
-                <button
-                  className="link-button"
-                  onClick={() => setDialog("backfill")}
-                >
-                  回补预览
-                </button>
-              )}
+              <div className="section-actions">
+                <a className="link-button" href={`#/history?dag_id=${part(dagId)}`} onClick={onViewAllRuns}>
+                  查看全部运行
+                </a>
+                {isAdmin && (
+                  <button className="link-button" onClick={() => setDialog("backfill")}>
+                    回补预览
+                  </button>
+                )}
+              </div>
             </div>
             {!dag.runs.length && !runId ? (
               <div className="empty compact">

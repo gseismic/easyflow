@@ -10,6 +10,8 @@
 | --- | --- | --- |
 | [001_basic_manual.py](001_basic_manual.py) | `example_manual_hello` | 手动触发一个 Python 任务 |
 | [002_basic_taskflow_etl.py](002_basic_taskflow_etl.py) | `example_taskflow_etl` | `@dag`、`@task`、ETL 和任务间返回值 |
+| [003_basic_project_quant.py](003_basic_project_quant.py) | `example_project_quant` | 量化项目和行情标签；仅手动运行 |
+| [004_basic_project_analytics.py](004_basic_project_analytics.py) | `example_project_analytics` | 分析项目和报表标签；仅手动运行 |
 | [101_schedule_daily.py](101_schedule_daily.py) | `example_daily_schedule` | 每日调度和逻辑日期 |
 | [102_schedule_weekday.py](102_schedule_weekday.py) | `example_weekday_schedule` | Cron、工作日和上海时区 |
 | [103_schedule_once.py](103_schedule_once.py) | `example_run_once` | 调度一次的初始化任务 |

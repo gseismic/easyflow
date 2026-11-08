@@ -16,7 +16,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from easyflow.sdk.exceptions import StateConflictError
 from easyflow.web.auth import AuthStore, COOKIE_NAME, LoginThrottle, csrf_token
-from easyflow.web.routers import auth, dags, history, runs
+from easyflow.web.routers import auth, catalog, dags, history, runs
 from easyflow.web.service import WebService
 
 STATIC = Path(__file__).parent / "static"
@@ -88,6 +88,7 @@ def create_app(*, dags_folder: str, database_url: str, log_root: str) -> FastAPI
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
     app.include_router(auth.router)
+    app.include_router(catalog.router)
     app.include_router(dags.router)
     app.include_router(history.router)
     app.include_router(runs.router)
