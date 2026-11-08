@@ -6,7 +6,7 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   --ink: #20362c;
-  --muted: #677a70;
+  --muted: #596e62;
   --border: #e1e9e3;
   --green: #175f42;
   --paper: #fff;
@@ -196,7 +196,7 @@ p {
   background: #f3f8f4;
 }
 .button.small {
-  min-height: 40px;
+  min-height: 44px;
   padding: 0 14px;
 }
 .summary-strip {
@@ -437,7 +437,7 @@ tbody tr:hover {
   color: #277655;
   background: transparent;
   border: 0;
-  min-height: 40px;
+  min-height: 44px;
   padding: 0 4px;
   font-size: 12px;
   font-weight: 700;
@@ -447,7 +447,7 @@ tbody tr:hover {
 }
 .notice .link-button {
   float: right;
-  min-height: auto;
+  min-height: 44px;
 }
 .back-link {
   display: inline-block;
@@ -670,6 +670,7 @@ tbody tr:hover {
 .field textarea,
 .log-toolbar select {
   width: 100%;
+  min-height: 44px;
   border: 1px solid #d7e3da;
   border-radius: 7px;
   background: #fff;
@@ -772,5 +773,318 @@ tbody tr:hover {
   }
   .scheduler-badge {
     font-size: 11px;
+  }
+}
+
+/* 工作台采用信息密度适中的单机控制台布局。 */
+.user-menu {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #536b5b;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.user-menu > span {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scheduler-badge small {
+  font-size: 11px;
+  font-weight: 400;
+}
+.login-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+  background:
+    radial-gradient(circle at 18% 10%, #e4f0e5, transparent 38%), #f5f7f4;
+}
+.login-card {
+  width: min(100%, 440px);
+  padding: 40px;
+  background: #fff;
+  border: 1px solid #dfe9e1;
+  border-radius: 16px;
+  box-shadow: 0 20px 70px #21392c12;
+}
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 20px;
+  color: #213b2d;
+  margin-bottom: 40px;
+}
+.login-card h1 {
+  margin-top: 12px;
+  font-size: 32px;
+}
+.login-card form {
+  margin-top: 28px;
+}
+.login-submit {
+  margin-top: 24px;
+  width: 100%;
+}
+.login-help {
+  display: grid;
+  gap: 8px;
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.6;
+  color: #617569;
+}
+.login-help strong {
+  color: #365242;
+}
+.login-help code {
+  padding: 10px;
+  overflow-wrap: anywhere;
+  color: #315b43;
+  background: #f2f7f2;
+  border-radius: 6px;
+}
+.login-footnote {
+  margin-top: 24px;
+  font:
+    600 10px "IBM Plex Mono",
+    monospace;
+  letter-spacing: 0.08em;
+  color: #70857a;
+}
+.login-footnote span {
+  letter-spacing: normal;
+  font-family: inherit;
+}
+.list-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 28px 20px;
+}
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(320px, 100%);
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid #dbe5de;
+  border-radius: 8px;
+  color: #607568;
+}
+.search-box > span {
+  font-size: 20px;
+  line-height: 1;
+}
+.search-box input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  background: transparent;
+}
+.search-box:focus-within {
+  outline: 3px solid #8bc0a3;
+  outline-offset: 2px;
+}
+.filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.filter {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #607568;
+  font-size: 12px;
+  font-weight: 600;
+}
+.filter.active {
+  background: #e8f3eb;
+  color: #175f42;
+}
+.table-subtitle {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #607568;
+}
+.detail-tabs {
+  display: flex;
+  gap: 24px;
+  margin: 28px 0 20px;
+  border-bottom: 1px solid var(--border);
+}
+.detail-tab {
+  min-height: 44px;
+  padding: 0 2px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #607568;
+  font-size: 13px;
+  font-weight: 600;
+}
+.detail-tab.active {
+  color: #175f42;
+  border-bottom-color: #26774f;
+}
+.run-overview .section-heading,
+.info-card .section-heading,
+.source-card .section-heading,
+.task-info .section-heading {
+  border-bottom: 1px solid #edf1ee;
+}
+.run-selector {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 28px 8px;
+}
+.run-selector label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  color: #536c5c;
+  font-size: 12px;
+  font-weight: 600;
+}
+.run-selector select {
+  max-width: min(100%, 500px);
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid #d7e3da;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+}
+.run-metadata,
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px 24px;
+  margin: 0;
+  padding: 20px 28px 24px;
+}
+.run-metadata dt,
+.info-grid dt {
+  color: #607568;
+  font-size: 11px;
+  font-weight: 600;
+}
+.run-metadata dd,
+.info-grid dd {
+  overflow-wrap: anywhere;
+  margin: 7px 0 0;
+  color: #294335;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.run-metadata > div:last-child {
+  grid-column: span 2;
+}
+.task-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.task-heading {
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+  font-family: "IBM Plex Mono", monospace;
+}
+.task-hint {
+  margin: 0 28px 24px;
+  font-size: 12px;
+}
+.historical-tasks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 24px;
+  border-top: 1px solid var(--border);
+  color: #607568;
+  font-size: 12px;
+}
+.historical-tasks button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.source-notice {
+  padding: 16px 28px;
+  color: #607568;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.source-output {
+  max-height: 680px;
+  margin: 0 28px 28px;
+  padding: 20px;
+  overflow: auto;
+  border-radius: 8px;
+  background: #25372d;
+  color: #d5e7d9;
+  font:
+    12px/1.7 "IBM Plex Mono",
+    monospace;
+  tab-size: 4;
+}
+@media (max-width: 900px) {
+  .scheduler-badge small {
+    display: none;
+  }
+  .list-tools {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .run-metadata,
+  .info-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 720px) {
+  .user-menu > span {
+    display: none;
+  }
+  .topbar {
+    gap: 8px;
+  }
+  .scheduler-badge {
+    padding: 8px;
+  }
+  .login-card {
+    padding: 32px 24px;
+  }
+  .list-tools {
+    padding: 0 20px 20px;
+  }
+  .run-selector {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 20px;
+  }
+  .run-metadata,
+  .info-grid {
+    gap: 16px;
+    padding: 20px;
+  }
+  .run-metadata > div:last-child {
+    grid-column: span 2;
+  }
+  .source-output {
+    margin: 0 20px 20px;
   }
 }

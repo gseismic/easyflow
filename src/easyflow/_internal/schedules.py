@@ -57,10 +57,16 @@ def validate_schedule(schedule: str | timedelta | None) -> None:
 
 
 def scheduler_intervals(
-    dag: Any, now: datetime, *, last_automated_date: datetime | None = None
+    dag: Any,
+    now: datetime,
+    *,
+    last_automated_date: datetime | None = None,
+    max_intervals: int = MAX_CATCHUP_PER_SCAN,
 ) -> list[DataInterval]:
     if now.tzinfo is None:
         raise ValueError("now 必须带时区。")
+    if max_intervals < 1:
+        raise ValueError("max_intervals 必须大于 0。")
     schedule = dag.schedule
     if schedule is None:
         return []
@@ -117,7 +123,7 @@ def scheduler_intervals(
         first = latest
 
     intervals: list[DataInterval] = []
-    while _utc(first) <= _utc(now) and len(intervals) < MAX_CATCHUP_PER_SCAN:
+    while _utc(first) <= _utc(now) and len(intervals) < max_intervals:
         if dag.end_date is not None and _utc(first) > _utc(dag.end_date):
             break
         intervals.append(interval_for_logical_date(schedule, first))

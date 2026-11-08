@@ -35,6 +35,7 @@ def list_dags(request: Request):
             "dags": [],
             "issues": [str(exc)],
             "scheduler_running": service.scheduler_running(),
+            "scheduler": service.scheduler_status(),
         }
     return {
         "dags": [service.dag_info(source) for source in discovered.sources],
@@ -42,6 +43,7 @@ def list_dags(request: Request):
             f"{item.file_path.name}: {item.message}" for item in discovered.issues
         ],
         "scheduler_running": service.scheduler_running(),
+        "scheduler": service.scheduler_status(),
         "loading": discovered.pending,
     }
 
@@ -49,6 +51,13 @@ def list_dags(request: Request):
 @router.get("/{dag_id}")
 def dag_detail(dag_id: str, request: Request):
     return request.app.state.service.detail(dag_id)
+
+
+@router.get("/{dag_id}/source")
+def dag_source(dag_id: str, request: Request, run_id: str | None = None):
+    if request.state.user.role != "admin":
+        raise HTTPException(status_code=403, detail="需要管理员权限。")
+    return request.app.state.service.source_code(dag_id, run_id)
 
 
 @router.post("/{dag_id}/pause")

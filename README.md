@@ -8,14 +8,31 @@ easyflow 是单机、轻量的工作流调度工具，面向 Airflow 3.2 的常�
 
 ```bash
 uv sync
+# 首次使用时创建管理员，密码在终端中隐藏输入
+uv run easyflow users create admin --role admin
 uv run easyflow web --dags-folder examples
 ```
 
-在本机浏览器打开 <http://127.0.0.1:8790>。`web` 默认启动本机 scheduler，也可以用 `--no-scheduler` 连接已启动的 scheduler。默认状态库是 `.easyflow/easyflow.db`，日志在 `.easyflow/logs`；可用 `--database-url`、`--log-root` 和 `--port` 修改。Web 仅监听 `127.0.0.1`，没有多用户或登录功能，请在可信的本机账户环境中使用。
+在本机浏览器打开 <http://127.0.0.1:8790>，使用刚创建的账户登录。`web` 默认启动本机 scheduler，也可以用 `--no-scheduler` 连接已启动的 scheduler。默认状态库是 `.easyflow/easyflow.db`，日志在 `.easyflow/logs`；可用 `--database-url`、`--log-root` 和 `--port` 修改。创建账户时必须指定与 Web 相同的 `--database-url`。Web 仅监听 `127.0.0.1`，不提供公网部署或 TLS。
 
 示例覆盖手动触发、定时、任务依赖、TaskFlow、Operator、参数、重试和量化数据；场景清单、命名规则及 Airflow 3.2 运行方法见 [示例说明](examples/README.md)。
 
-界面可以查看 DAG、依赖图、最近 100 次运行和各次任务日志，触发运行，暂停或恢复调度，预览并清理任务后重跑，以及预览回补日期。清理任务会再次执行任务，外部写入应由任务保证幂等；只清理单个任务时，已成功的下游任务不会自动重跑。
+界面可以搜索和筛选工作流，查看调度器状态、调度计划、依赖图、最近 100 次运行、任务详情与日志。管理员可以查看当前 DAG 文件源码，触发运行，暂停或恢复调度，预览并清理任务后重跑，以及预览回补日期。清理任务会再次执行任务，外部写入应由任务保证幂等；只清理单个任务时，已成功的下游任务不会自动重跑。
+
+## 账户与权限
+
+Web 和业务 API 必须登录。`admin` 可以执行界面中的管理操作和查看 DAG 源码；`viewer` 可以查看状态、运行、任务详情和日志。日志可能包含业务数据、凭证或代码片段，请只授予可信用户读取权限。账户由有本机权限的操作者通过 CLI 管理：
+
+```bash
+uv run easyflow users create reader --role viewer
+uv run easyflow users list
+uv run easyflow users passwd admin
+uv run easyflow users remove reader --yes
+```
+
+密码至少 10 个字符，创建或重置时在终端隐藏输入，不作为命令行参数传递。重置密码会使该账户所有现有会话失效；移除账户会使其会话失效，最后一个管理员不可移除。会话有效期为 12 小时，退出登录立即注销；多次登录失败后须稍等再试。状态库仅保存密码的 Argon2id 散列和随机会话令牌的摘要。Web 认证不隔离本机操作系统用户对数据库、日志或 DAG 文件的直接访问。
+
+调度器在线表示租约仍有效，任务心跳表示最近一次报告，并不能保证任务内部持续推进。列表中的下次计划是按当前定义和历史计算的候选时间，不保证准时执行。实际入队和开始时间与逻辑时间分开显示。源码页显示当前 DAG 文件，不保存历史源码快照；运行与当前定义不一致或无法确认时会提示。
 
 ## 编写 DAG
 
@@ -79,7 +96,7 @@ DAG 暂停状态会持久化。暂停时仍可以创建手动运行，但运行�
 - 支持 `@once`、常见 cron preset、5 字段 cron 和 `timedelta`；不支持秒字段或年份字段。默认 DAG 活跃运行上限为 1，与 Airflow 的部署默认值可能不同。
 - DAG 文件在独立子进程解析。常驻模式逐文件异步发现，单个缓慢文件不会阻止其他文件；文件代码仍有本机进程权限，不是不可信代码沙箱。跨文件重复 DAG ID 在相关文件都解析后才能识别，已执行的运行无法撤回；部署前可用 `dags list` 检查解析错误和重复 ID。
 - 运行启动前校验 DAG 文件和已追踪到的本地 Python 依赖；运行期动态导入、第三方库、环境变量和外部文件不在此保证内。代码变化会阻止旧运行继续使用新定义，不保证冻结完整运行环境。
-- 租约和重试提供故障恢复，不保证外部副作用 exactly-once。LocalExecutor 仅支持本机进程；不支持分布式执行、多用户权限、动态任务映射或完整 Airflow Provider/REST/CLI。
+- 租约和重试提供故障恢复，不保证外部副作用 exactly-once。LocalExecutor 仅支持本机进程；Web 提供固定的管理员与只读角色，不支持分布式执行、动态任务映射或完整 Airflow Provider/REST/CLI。
 - 当前处于开发阶段，不承诺旧版 easyflow 数据库和时间行为的兼容或自动迁移。升级前请自行备份已有数据库。
 
 ## 开发与验证

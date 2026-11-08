@@ -43,10 +43,12 @@ db_app = typer.Typer(help="管理状态库。", no_args_is_help=True)
 dags_app = typer.Typer(help="管理 DAG。", no_args_is_help=True)
 tasks_app = typer.Typer(help="管理任务实例。", no_args_is_help=True)
 backfill_app = typer.Typer(help="回补历史运行。", no_args_is_help=True)
+users_app = typer.Typer(help="管理本机 Web 账户。", no_args_is_help=True)
 app.add_typer(db_app, name="db")
 app.add_typer(dags_app, name="dags")
 app.add_typer(tasks_app, name="tasks")
 app.add_typer(backfill_app, name="backfill")
+app.add_typer(users_app, name="users")
 
 
 def _configure_parallelism(store: SQLiteStateStore, requested: int | None) -> int:
@@ -76,6 +78,69 @@ def db_init(database_url: str = DEFAULT_DATABASE_URL) -> None:
     """初始化 SQLite 状态库。"""
     path = SQLiteStateStore(database_url).init_db()
     typer.echo(f"Initialized easyflow SQLite database at {path}")
+
+
+def _auth_store(database_url: str):
+    from easyflow.web.auth import AuthStore
+
+    store = SQLiteStateStore(database_url)
+    store.init_db()
+    return AuthStore(store.path)
+
+
+def _prompt_password() -> str:
+    return typer.prompt(
+        "密码（至少 10 个字符）", hide_input=True, confirmation_prompt=True
+    )
+
+
+@users_app.command("create")
+def users_create(
+    username: str,
+    role: Annotated[str, typer.Option("--role", help="admin 或 viewer。")],
+    database_url: str = DEFAULT_DATABASE_URL,
+) -> None:
+    """创建 Web 账户，不在命令行参数中传递密码。"""
+    password = _prompt_password()
+    try:
+        _auth_store(database_url).create_user(username, password, role)
+    except ValueError as exc:
+        _error(str(exc), 2)
+    typer.echo(f"已创建 {username}（{role}）。")
+
+
+@users_app.command("passwd")
+def users_passwd(username: str, database_url: str = DEFAULT_DATABASE_URL) -> None:
+    """重置密码并使该用户的现有会话失效。"""
+    password = _prompt_password()
+    try:
+        _auth_store(database_url).set_password(username, password)
+    except ValueError as exc:
+        _error(str(exc), 2)
+    typer.echo(f"已重置 {username} 的密码。")
+
+
+@users_app.command("list")
+def users_list(database_url: str = DEFAULT_DATABASE_URL) -> None:
+    """列出本机 Web 账户和角色。"""
+    for user in _auth_store(database_url).list_users():
+        typer.echo(f"{user.username}\t{user.role}")
+
+
+@users_app.command("remove")
+def users_remove(
+    username: str,
+    yes: Annotated[bool, typer.Option("--yes", help="确认移除账户。")] = False,
+    database_url: str = DEFAULT_DATABASE_URL,
+) -> None:
+    """移除账户并注销其会话；保留至少一个管理员。"""
+    if not yes:
+        _error("缺少 --yes，未移除账户。", 2)
+    try:
+        _auth_store(database_url).remove_user(username)
+    except ValueError as exc:
+        _error(str(exc), 2)
+    typer.echo(f"已移除 {username}。")
 
 
 @dags_app.command("list")

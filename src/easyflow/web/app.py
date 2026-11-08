@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import signal
+import hmac
 import subprocess
 import sys
 from contextlib import asynccontextmanager
@@ -14,7 +15,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from easyflow.sdk.exceptions import StateConflictError
-from easyflow.web.routers import dags, runs
+from easyflow.web.auth import AuthStore, COOKIE_NAME, LoginThrottle, csrf_token
+from easyflow.web.routers import auth, dags, runs
 from easyflow.web.service import WebService
 
 STATIC = Path(__file__).parent / "static"
@@ -36,6 +38,8 @@ def create_app(*, dags_folder: str, database_url: str, log_root: str) -> FastAPI
         lifespan=lifespan,
     )
     app.state.service = service
+    app.state.auth = AuthStore(service.store.path)
+    app.state.login_throttle = LoginThrottle()
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1"])
 
     @app.middleware("http")
@@ -50,7 +54,29 @@ def create_app(*, dags_folder: str, database_url: str, log_root: str) -> FastAPI
                 return JSONResponse(
                     {"detail": "请求来源与本机界面不一致。"}, status_code=403
                 )
-        return await call_next(request)
+        if (
+            request.url.path.startswith("/api/")
+            and request.url.path != "/api/auth/login"
+        ):
+            token = request.cookies.get(COOKIE_NAME)
+            user = app.state.auth.session_user(token)
+            if user is None:
+                return JSONResponse({"detail": "请先登录。"}, status_code=401)
+            request.state.user = user
+            if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+                supplied = request.headers.get("x-csrf-token", "")
+                if not hmac.compare_digest(
+                    supplied.encode(), csrf_token(token).encode()
+                ):
+                    return JSONResponse(
+                        {"detail": "请求校验失败，请刷新页面。"}, status_code=403
+                    )
+                if user.role != "admin" and request.url.path != "/api/auth/logout":
+                    return JSONResponse({"detail": "需要管理员权限。"}, status_code=403)
+        response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.exception_handler(LookupError)
     async def not_found(request: Request, exc: LookupError):
@@ -61,6 +87,7 @@ def create_app(*, dags_folder: str, database_url: str, log_root: str) -> FastAPI
     async def invalid_request(request: Request, exc: Exception):
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
+    app.include_router(auth.router)
     app.include_router(dags.router)
     app.include_router(runs.router)
     app.mount(

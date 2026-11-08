@@ -206,6 +206,9 @@ tempCodeRunnerFile.py
 # Ruff stuff:
 .ruff_cache/
 
+# easyflow 本地运行状态和账户初始化凭据
+/.easyflow/
+
 # PyPI configuration file
 .pypirc
 

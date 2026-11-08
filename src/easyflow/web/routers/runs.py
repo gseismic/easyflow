@@ -20,16 +20,8 @@ def _check_run(request: Request, dag_id: str, run_id: str):
 
 @router.get("")
 def run_detail(dag_id: str, run_id: str, request: Request):
-    service, record = _check_run(request, dag_id, run_id)
-    return {
-        "run_id": run_id,
-        "state": record.state,
-        "logical_date": record.logical_date,
-        "tasks": {
-            key: value.value if value else None
-            for key, value in service.store.list_task_states(dag_id, run_id).items()
-        },
-    }
+    service, _ = _check_run(request, dag_id, run_id)
+    return service.run_detail(dag_id, run_id)
 
 
 @router.get("/tasks/{task_id}/logs")
@@ -61,7 +53,10 @@ def clear_preview(dag_id: str, run_id: str, body: ClearRequest, request: Request
 def clear_tasks(dag_id: str, run_id: str, body: ClearRequest, request: Request):
     service, _ = _check_run(request, dag_id, run_id)
     result = service.store.clear_task_instances(
-        dag_id=dag_id, run_id=run_id, task_ids=body.task_ids, actor="web"
+        dag_id=dag_id,
+        run_id=run_id,
+        task_ids=body.task_ids,
+        actor=f"web:{request.state.user.username}",
     )
     if result.blocked:
         raise HTTPException(

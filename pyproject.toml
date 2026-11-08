@@ -9,6 +9,7 @@ description = "Single-node Airflow-compatible workflow subset"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "argon2-cffi>=23.1,<26",
     "croniter>=6.2.3,<7",
     "jinja2>=3.1",
     "fastapi>=0.115,<1",

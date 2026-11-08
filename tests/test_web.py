@@ -27,6 +27,13 @@ with DAG("demo") as dag:
         log_root=str(tmp_path / "logs"),
     )
     client = TestClient(app, base_url="http://127.0.0.1:8790")
+    app.state.auth.create_user("admin", "a sufficiently long password", "admin")
+    login = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "a sufficiently long password"},
+    )
+    assert login.status_code == 200
+    client.headers["X-CSRF-Token"] = login.json()["csrf_token"]
     overview = client.get("/api/dags").json()
     assert [dag["dag_id"] for dag in overview["dags"]] == ["demo"]
     assert not overview["scheduler_running"]

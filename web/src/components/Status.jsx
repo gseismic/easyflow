@@ -8,10 +8,11 @@ const labels = {
   skipped: "已跳过",
   up_for_retry: "等待重试",
   null: "未运行",
+  unknown: "未知",
 };
 
 export default function Status({ value }) {
-  const state = value || "null";
+  const state = value === undefined ? "unknown" : value || "null";
   return (
     <span className={`status status-${state}`}>
       <span className="status-dot" />
@@ -34,4 +35,17 @@ export function formatTime(value) {
         second: "2-digit",
         hour12: false,
       }).format(time);
+}
+
+export function formatDuration(start, end) {
+  if (!start || !end) return "—";
+  const seconds = Math.max(
+    0,
+    Math.floor((new Date(end) - new Date(start)) / 1000),
+  );
+  if (!Number.isFinite(seconds)) return "—";
+  if (seconds < 60) return `${seconds} 秒`;
+  if (seconds < 3600)
+    return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+  return `${Math.floor(seconds / 3600)} 小时 ${Math.floor((seconds % 3600) / 60)} 分`;
 }
