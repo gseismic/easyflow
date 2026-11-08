@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import json
 import sqlite3
 import threading
-import hashlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -21,6 +24,29 @@ from easyflow._internal.schedules import (
     scheduler_intervals,
 )
 from easyflow._internal.state_store import SQLiteStateStore
+
+
+def _history_cursor(row: dict) -> str:
+    value = [row["queued_at"], row["dag_id"], row["run_id"]]
+    raw = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _parse_history_cursor(cursor: str) -> tuple[str, str, str]:
+    try:
+        raw = base64.b64decode(
+            cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True
+        )
+        value = json.loads(raw)
+    except (ValueError, binascii.Error, UnicodeDecodeError, RecursionError) as exc:
+        raise ValueError("运行历史的分页位置无效，请返回第一页。") from exc
+    if (
+        not isinstance(value, list)
+        or len(value) != 3
+        or not all(isinstance(item, str) and item for item in value)
+    ):
+        raise ValueError("运行历史的分页位置无效，请返回第一页。")
+    return tuple(value)
 
 
 class WebService:
@@ -130,6 +156,35 @@ class WebService:
             "FROM dag_run WHERE dag_id = ? ORDER BY queued_at DESC, rowid DESC LIMIT ?",
             (dag_id, limit),
         )
+
+    def history(
+        self, *, limit: int, cursor: str | None, dag: str | None, state: str | None
+    ) -> dict:
+        conditions = []
+        params: list = []
+        if dag:
+            conditions.append("instr(lower(dag_id), lower(?)) > 0")
+            params.append(dag)
+        if state:
+            conditions.append("state = ?")
+            params.append(state)
+        if cursor:
+            conditions.append("(queued_at, dag_id, run_id) < (?, ?, ?)")
+            params.extend(_parse_history_cursor(cursor))
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        params.append(limit + 1)
+        rows = self.rows(
+            "SELECT dag_id, run_id, run_type, state, logical_date, "
+            "queued_at, start_date, end_date FROM dag_run"
+            f"{where} ORDER BY queued_at DESC, dag_id DESC, run_id DESC LIMIT ?",
+            tuple(params),
+        )
+        return {
+            "runs": rows[:limit],
+            "next_cursor": _history_cursor(rows[limit - 1])
+            if len(rows) > limit
+            else None,
+        }
 
     def dag_info(self, source: DagSource) -> dict:
         dag = source.dag

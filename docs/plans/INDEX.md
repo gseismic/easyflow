@@ -11,3 +11,5 @@
 - 2026-11-08 17:19 Asia/Shanghai：[示例审查问题修复与循环复查结果](PLAN-20261108-003-model-unknown-example-review-fixes-OUTCOME.md)，审查问题已修复；服务 `SIGTERM` 遗留调度器问题另记为 `KI-20261108-1718-001`。
 - 2026-11-08 17:34 Asia/Shanghai：[强制认证与简洁工作流界面计划](PLAN-20261108-004-model-unknown-auth-dashboard.md)，进行中。
 - 2026-11-08 18:08 Asia/Shanghai：[强制认证与简洁工作流界面结果](PLAN-20261108-004-model-unknown-auth-dashboard-OUTCOME.md)，已实施并完成全量测试、浏览器与打包验证。
+- 2026-11-08 18:19 Asia/Shanghai：[全部运行历史栏目计划](PLAN-20261108-005-model-unknown-run-history.md)，进行中。
+- 2026-11-08 18:37 Asia/Shanghai：[全部运行历史栏目结果](PLAN-20261108-005-model-unknown-run-history-OUTCOME.md)，已实施并通过全量测试、浏览器与真实服务验证。

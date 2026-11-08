@@ -13,7 +13,7 @@ export default function TaskDetails({ task, detail, hasRun }) {
   if (!task)
     return (
       <section className="card task-info">
-        <div className="empty compact">选择依赖图中的任务查看详情。</div>
+        <div className="empty compact">选择任务查看详情。</div>
       </section>
     );
   const heartbeat = detail?.last_heartbeat_at;

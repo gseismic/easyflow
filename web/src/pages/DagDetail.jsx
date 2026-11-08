@@ -3,117 +3,20 @@ import { part, post, usePolling } from "../api";
 import BackfillDialog from "../components/BackfillDialog";
 import ClearDialog from "../components/ClearDialog";
 import Graph from "../components/Graph";
+import RunMetadata, { runTypeLabel } from "../components/RunMetadata";
 import ScheduleDetails from "../components/ScheduleDetails";
 import SourceCode from "../components/SourceCode";
-import Status, { formatDuration, formatTime } from "../components/Status";
+import Status, { formatTime } from "../components/Status";
 import TaskDetails from "../components/TaskDetails";
+import TaskLog from "../components/TaskLog";
 import TriggerDialog from "../components/TriggerDialog";
 
-const runTypes = {
-  manual: "手动触发",
-  scheduled: "定时触发",
-  backfill: "历史回补",
-};
 const runStates = {
   queued: "排队中",
   running: "运行中",
   success: "成功",
   failed: "失败",
 };
-
-function RunMetadata({ run }) {
-  const values = [
-    ["触发方式", runTypes[run.run_type] || run.run_type],
-    ["入队时间", formatTime(run.queued_at)],
-    ["开始时间", formatTime(run.start_date)],
-    ["结束时间", formatTime(run.end_date)],
-    [
-      "执行耗时",
-      formatDuration(
-        run.start_date,
-        run.end_date ||
-          (run.state === "running" ? new Date().toISOString() : null),
-      ),
-    ],
-    ["逻辑时间", formatTime(run.logical_date)],
-    [
-      "数据区间",
-      `${formatTime(run.data_interval_start)} — ${formatTime(run.data_interval_end)}`,
-    ],
-  ];
-  return (
-    <dl className="run-metadata">
-      {values.map(([label, value]) => (
-        <div key={label}>
-          <dt>{label}</dt>
-          <dd>{value}</dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
-
-function TaskLog({
-  logs,
-  taskId,
-  runId,
-  attempt,
-  setAttempt,
-  isAdmin,
-  onClear,
-}) {
-  return (
-    <section className="card log-card">
-      <div className="section-heading">
-        <div>
-          <h2>任务日志</h2>
-          <p>{taskId || "选择依赖图中的任务"}</p>
-        </div>
-        {isAdmin && runId && taskId && (
-          <button className="button subtle small" onClick={onClear}>
-            预览重跑
-          </button>
-        )}
-      </div>
-      {!runId ? (
-        <div className="empty compact">选择一次运行后查看任务日志。</div>
-      ) : !taskId ? (
-        <div className="empty compact">选择任务后查看日志。</div>
-      ) : (
-        <>
-          <div className="log-toolbar">
-            <span>运行日志</span>
-            <label>
-              执行次数{" "}
-              <select
-                value={attempt}
-                onChange={(event) => setAttempt(event.target.value)}
-              >
-                <option value="">最新</option>
-                {logs.data?.attempts?.map((item) => (
-                  <option value={item.try_number} key={item.try_number}>
-                    第 {item.try_number} 次
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          {logs.error ? (
-            <div className="notice error" role="alert">
-              日志加载失败：{logs.error}
-            </div>
-          ) : (
-            <pre className="log-output">
-              {logs.data?.content == null
-                ? "日志尚未生成。"
-                : `${logs.data.truncated ? "[仅显示最后 1 MB]\n" : ""}${logs.data.content}`}
-            </pre>
-          )}
-        </>
-      )}
-    </section>
-  );
-}
 
 export default function DagDetail({ dagId, refreshOverview, isAdmin }) {
   const base = `/api/dags/${part(dagId)}`;
@@ -331,7 +234,7 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin }) {
                     {dag.runs.map((item) => (
                       <option key={item.run_id} value={item.run_id}>
                         {formatTime(item.start_date || item.queued_at)} ·{" "}
-                        {runTypes[item.run_type] || item.run_type} ·{" "}
+                        {runTypeLabel(item.run_type)} ·{" "}
                         {runStates[item.state] || item.state}
                       </option>
                     ))}

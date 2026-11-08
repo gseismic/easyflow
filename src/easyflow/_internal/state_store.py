@@ -98,6 +98,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_backfill_dag_run
 ON dag_run(dag_id, backfill_id, logical_date)
 WHERE run_type = 'backfill';
 
+CREATE INDEX IF NOT EXISTS ix_dag_run_history
+ON dag_run(queued_at DESC, dag_id DESC, run_id DESC);
+
 CREATE TABLE IF NOT EXISTS task_instance (
     dag_id TEXT NOT NULL,
     run_id TEXT NOT NULL,

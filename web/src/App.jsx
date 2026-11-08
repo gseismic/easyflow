@@ -3,23 +3,43 @@ import { api, post, setCsrfToken, usePolling } from "./api";
 import SchedulerStatus from "./components/SchedulerStatus";
 import DagList from "./pages/DagList";
 import DagDetail from "./pages/DagDetail";
+import HistoryList from "./pages/HistoryList";
+import HistoryRun from "./pages/HistoryRun";
 import Login from "./pages/Login";
 
-function currentDag() {
-  const match = window.location.hash.match(/^#\/dags\/(.+)$/);
+function currentRoute() {
+  const [path, query = ""] = window.location.hash.split("?", 2);
+  if (path === "#/history") return { name: "history" };
+  if (path === "#/history/run") {
+    const params = new URLSearchParams(query);
+    const dagId = params.get("dag_id");
+    const runId = params.get("run_id");
+    return dagId && runId
+      ? { name: "history-run", dagId, runId }
+      : { name: "history" };
+  }
+  const match = path.match(/^#\/dags\/(.+)$/);
   try {
-    return match ? decodeURIComponent(match[1]) : null;
+    return match
+      ? { name: "dag", dagId: decodeURIComponent(match[1]) }
+      : { name: "dags" };
   } catch {
-    return null;
+    return { name: "dags" };
   }
 }
 
 function Workspace({ session, onLogout }) {
-  const [dagId, setDagId] = useState(currentDag);
+  const [route, setRoute] = useState(currentRoute);
+  const [historyView, setHistoryView] = useState({
+    query: "",
+    state: "",
+    cursors: [null],
+    page: 0,
+  });
   const [logoutError, setLogoutError] = useState("");
   const overview = usePolling("/api/dags", 5000);
   useEffect(() => {
-    const update = () => setDagId(currentDag());
+    const update = () => setRoute(currentRoute());
     window.addEventListener("hashchange", update);
     return () => window.removeEventListener("hashchange", update);
   }, []);
@@ -41,7 +61,20 @@ function Workspace({ session, onLogout }) {
           <strong>easyflow</strong>
         </a>
         <span className="header-divider" />
-        <span className="header-label">工作流管理</span>
+        <nav className="main-nav" aria-label="主导航">
+          <a
+            href="#/"
+            aria-current={["dags", "dag"].includes(route.name) ? "page" : undefined}
+          >
+            工作流
+          </a>
+          <a
+            href="#/history"
+            aria-current={route.name.startsWith("history") ? "page" : undefined}
+          >
+            运行历史
+          </a>
+        </nav>
         <div className="topbar-spacer" />
         <SchedulerStatus overview={overview} />
         <div className="user-menu">
@@ -58,12 +91,20 @@ function Workspace({ session, onLogout }) {
           退出失败：{logoutError}
         </div>
       )}
-      {dagId ? (
+      {route.name === "dag" ? (
         <DagDetail
-          key={dagId}
-          dagId={dagId}
+          key={route.dagId}
+          dagId={route.dagId}
           refreshOverview={overview.refresh}
           isAdmin={session.role === "admin"}
+        />
+      ) : route.name === "history" ? (
+        <HistoryList view={historyView} setView={setHistoryView} />
+      ) : route.name === "history-run" ? (
+        <HistoryRun
+          key={JSON.stringify([route.dagId, route.runId])}
+          dagId={route.dagId}
+          runId={route.runId}
         />
       ) : (
         <DagList overview={overview} />
