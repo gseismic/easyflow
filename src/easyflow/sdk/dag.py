@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import copy
 import re
 from collections import deque
 from collections.abc import Collection
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
-from easyflow.sdk._compat import DAG_UNSUPPORTED_KWARGS, reject_kwargs
+from easyflow.sdk._compat import (
+    DAG_UNSUPPORTED_KWARGS,
+    OPERATOR_DEFAULT_ARG_KEYS,
+    OPERATOR_UNSUPPORTED_KWARGS,
+    reject_kwargs,
+)
 from easyflow.sdk.exceptions import (
     DagCycleError,
     DagDefinitionError,
@@ -18,10 +26,23 @@ from easyflow.sdk.states import TaskInstanceState
 
 _DAG_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _DAG_STACK: list[DAG] = []
+_REGISTERED_DAGS: ContextVar[list[DAG] | None] = ContextVar(
+    "easyflow_registered_dags", default=None
+)
 
 
 def current_dag() -> "DAG | None":
     return _DAG_STACK[-1] if _DAG_STACK else None
+
+
+@contextmanager
+def collect_registered_dags() -> Iterator[list[DAG]]:
+    dags: list[DAG] = []
+    token = _REGISTERED_DAGS.set(dags)
+    try:
+        yield dags
+    finally:
+        _REGISTERED_DAGS.reset(token)
 
 
 @dataclass(frozen=True)
@@ -63,6 +84,7 @@ class DAG:
         tags: Collection[str] | None = None,
         max_active_tasks: int | None = None,
         max_active_runs: int | None = None,
+        auto_register: bool = True,
         **kwargs: Any,
     ) -> None:
         reject_kwargs("DAG", kwargs, DAG_UNSUPPORTED_KWARGS)
@@ -72,11 +94,21 @@ class DAG:
         self.start_date = start_date
         self.end_date = end_date
         self.catchup = catchup
-        self.default_args = dict(default_args or {})
+        self.default_args = copy.deepcopy(default_args or {})
+        reject_kwargs(
+            "DAG.default_args",
+            {
+                key: value
+                for key, value in self.default_args.items()
+                if key not in OPERATOR_DEFAULT_ARG_KEYS
+            },
+            OPERATOR_UNSUPPORTED_KWARGS,
+        )
         self.params = dict(params or {})
         self.tags = tuple(tags or ())
         self.max_active_tasks = max_active_tasks
         self.max_active_runs = max_active_runs
+        self.auto_register = auto_register
         self.task_dict: dict[str, Any] = {}
 
         self._validate_init()
@@ -116,6 +148,9 @@ class DAG:
         popped = _DAG_STACK.pop()
         if popped is not self:
             raise RuntimeError("DAG context stack corrupted")
+        registry = _REGISTERED_DAGS.get()
+        if exc_type is None and self.auto_register and registry is not None:
+            registry.append(self)
 
     def add_task(self, task: Any) -> None:
         if task.task_id in self.task_dict:
@@ -136,6 +171,7 @@ class DAG:
 
     def validate(self) -> None:
         for task in self.tasks:
+            task.set_xcom_dependencies()
             if task.dag is not self:
                 raise TaskBindingError(
                     f"Task {task.task_id!r} 未绑定到 DAG {self.dag_id!r}。"

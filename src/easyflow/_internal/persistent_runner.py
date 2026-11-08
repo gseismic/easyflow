@@ -27,11 +27,14 @@ from easyflow._internal.schedules import DataInterval
 from easyflow._internal.state_store import (
     SchedulerFence,
     SQLiteStateStore,
+    TaskCapacityFull,
+    DagPaused,
     run_timezone,
     task_retry_settings,
 )
 from easyflow.sdk.context import set_current_context
 from easyflow.sdk.dag import DAG
+from easyflow.sdk.exceptions import AirflowSkipException
 from easyflow.sdk.states import DagRunState, TaskInstanceState
 from easyflow.sdk.testing import (
     TERMINAL_STATES,
@@ -63,6 +66,8 @@ class PersistentXComStore:
         self.pending[(task_id, key)] = value
 
     def pull(self, task_id: str, key: str = "return_value") -> Any:
+        if (task_id, key) in self.pending:
+            return self.pending[(task_id, key)]
         return self.store.pull_xcom(self.dag_id, self.run_id, task_id, key)
 
     def values_for_task(self, task_id: str) -> dict[str, Any]:
@@ -207,7 +212,9 @@ class PersistentDagRunner:
         file_path: str | Path | None = None,
         executor: str = "sequential",
         parallelism: int = 1,
+        wait_for_retry: bool = True,
     ) -> PersistentRunResult:
+        self.store.configure_parallelism(parallelism)
         with self._run_lock(dag.dag_id, run_id) as acquired:
             if not acquired:
                 record = self.store.get_dag_run(dag.dag_id, run_id)
@@ -225,6 +232,7 @@ class PersistentDagRunner:
                 file_path=file_path,
                 executor=executor,
                 parallelism=parallelism,
+                wait_for_retry=wait_for_retry,
             )
 
     @contextmanager
@@ -272,6 +280,7 @@ class PersistentDagRunner:
         file_path: str | Path | None = None,
         executor: str = "sequential",
         parallelism: int = 1,
+        wait_for_retry: bool = True,
     ) -> PersistentRunResult:
         record = self.store.get_dag_run(dag.dag_id, run_id)
         if record is None:
@@ -283,6 +292,16 @@ class PersistentDagRunner:
                 state=DagRunState(record.state),
                 task_states=self.store.list_task_states(dag.dag_id, run_id),
             )
+        if self.store.is_dag_paused(dag.dag_id):
+            return PersistentRunResult(
+                dag.dag_id,
+                run_id,
+                DagRunState(record.state),
+                self.store.list_task_states(dag.dag_id, run_id),
+            )
+        if getattr(dag, "_easyflow_snapshot", False) and executor == "sequential":
+            executor = "local"
+            parallelism = 1
         if file_path is not None:
             current_hash = definition_hash_for_dag(dag, file_path)
             loaded_source = getattr(dag, "_easyflow_source_sha256", None)
@@ -329,6 +348,7 @@ class PersistentDagRunner:
                 logical_date=logical_date,
                 conf=conf,
                 parallelism=parallelism,
+                wait_for_retry=wait_for_retry,
             )
         if executor != "sequential":
             raise ValueError(f"未知 executor: {executor}")
@@ -347,6 +367,8 @@ class PersistentDagRunner:
                 )
             progressed = False
             for task in ordered_tasks:
+                if self.store.is_dag_paused(dag.dag_id):
+                    break
                 current_state = task_states[task.task_id]
                 if current_state in TERMINAL_STATES:
                     continue
@@ -421,6 +443,7 @@ class PersistentDagRunner:
         logical_date: datetime,
         conf: dict[str, Any],
         parallelism: int,
+        wait_for_retry: bool,
     ) -> PersistentRunResult:
         from easyflow._internal.local_executor import LocalExecutor
 
@@ -442,6 +465,7 @@ class PersistentDagRunner:
             conf=conf,
             should_continue=self.should_continue,
             scheduler_fence=self.scheduler_fence,
+            wait_for_retry=wait_for_retry,
         )
         final_states = executor.run()
         record_now = self.store.get_dag_run(dag.dag_id, run_id)
@@ -492,6 +516,7 @@ class PersistentDagRunner:
         logical_date: datetime,
         conf: dict[str, Any],
         xcom_store: PersistentXComStore,
+        single_attempt: bool = False,
     ) -> None:
         retries = _resolve_retries(dag, task)
         delay, factor, maximum = task_retry_settings(dag, task)
@@ -503,16 +528,26 @@ class PersistentDagRunner:
             if retry_at is not None:
                 remaining = (retry_at - datetime.now(timezone.utc)).total_seconds()
                 if remaining > 0:
+                    if single_attempt:
+                        return
                     time.sleep(min(remaining, 0.2))
                     continue
-            try_number = self.store.start_task_try(
-                dag.dag_id,
-                run_id,
-                task.task_id,
-                owner=self.runner_id,
-                lease_seconds=self.task_lease_seconds,
-                scheduler_fence=self.scheduler_fence,
-            )
+            try:
+                try_number = self.store.start_task_try(
+                    dag.dag_id,
+                    run_id,
+                    task.task_id,
+                    owner=self.runner_id,
+                    lease_seconds=self.task_lease_seconds,
+                    scheduler_fence=self.scheduler_fence,
+                )
+            except TaskCapacityFull:
+                time.sleep(0.05)
+                continue
+            except DagPaused:
+                if single_attempt:
+                    raise
+                return
             if try_number is None:
                 return
             heartbeat = _HeartbeatThread(
@@ -546,7 +581,7 @@ class PersistentDagRunner:
                 heartbeat.stop()
                 if task.do_xcom_push:
                     _push_result(task, result, xcom_store)
-                self.store.commit_success(
+                self.store.commit_task_terminal(
                     dag_id=dag.dag_id,
                     run_id=run_id,
                     task_id=task.task_id,
@@ -554,6 +589,18 @@ class PersistentDagRunner:
                     xcom_values=xcom_store.values_for_task(task.task_id),
                 )
                 xcom_store.clear_task(task.task_id)
+                return
+            except AirflowSkipException:
+                heartbeat.stop()
+                xcom_store.clear_task(task.task_id)
+                self.store.commit_task_terminal(
+                    dag_id=dag.dag_id,
+                    run_id=run_id,
+                    task_id=task.task_id,
+                    try_number=try_number,
+                    xcom_values={},
+                    state=TaskInstanceState.SKIPPED,
+                )
                 return
             except Exception as exc:
                 heartbeat.stop()
@@ -572,7 +619,7 @@ class PersistentDagRunner:
                     retry_factor=factor,
                     max_retry_delay=maximum,
                 )
-                if next_state == TaskInstanceState.FAILED:
+                if next_state == TaskInstanceState.FAILED or single_attempt:
                     return
 
     def _run_single_attempt(

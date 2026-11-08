@@ -363,7 +363,7 @@ def test_clear_reactivation_respects_capacity_and_finish_rechecks_state(tmp_path
     assert store.get_dag_run(dag.dag_id, first).state == "success"
     store.set_dag_run_state(dag.dag_id, second, DagRunState.RUNNING)
     store.start_task_try(dag.dag_id, second, "work")
-    store.commit_success(
+    store.commit_task_terminal(
         dag_id=dag.dag_id, run_id=second, task_id="work", try_number=1, xcom_values={}
     )
     assert store.clear_task_instances(dag_id=dag.dag_id, run_id=second).to_clear == [

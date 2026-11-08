@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Callable
 
@@ -10,30 +9,8 @@ from easyflow.sdk.dag import current_dag
 from easyflow.sdk.xcom import XComArg
 
 
-def _iter_xcom_args(value: Any) -> list[XComArg]:
-    if isinstance(value, XComArg):
-        return [value]
-    if isinstance(value, Mapping):
-        found: list[XComArg] = []
-        for item in value.values():
-            found.extend(_iter_xcom_args(item))
-        return found
-    if isinstance(value, (list, tuple, set, frozenset)):
-        found = []
-        for item in value:
-            found.extend(_iter_xcom_args(item))
-        return found
-    return []
-
-
 class TaskFlowPythonOperator(PythonOperator):
-    def execute(self, context: dict[str, Any]) -> Any:
-        from easyflow.sdk.testing import resolve_xcom_args
-
-        xcom_store = context["_xcom_store"]
-        args = resolve_xcom_args(self.op_args, xcom_store)
-        kwargs = resolve_xcom_args(self.op_kwargs, xcom_store)
-        return self.python_callable(*args, **kwargs)
+    pass
 
 
 @dataclass(frozen=True)
@@ -57,8 +34,6 @@ class TaskDecorator:
             dag=dag,
             **op_kwargs,
         )
-        for xcom_arg in _iter_xcom_args(args) + _iter_xcom_args(kwargs):
-            xcom_arg.operator.set_downstream(operator)
         return XComArg(operator)
 
     def override(self, **kwargs: Any) -> "TaskDecorator":

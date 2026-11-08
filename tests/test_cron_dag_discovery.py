@@ -6,20 +6,29 @@ import pytest
 
 from easyflow._internal.cron import validate_cron
 from easyflow._internal.dag_parser import discover_dag_sources
-from easyflow._internal.schedules import backfill_intervals, latest_ended_interval
+from easyflow._internal.schedules import backfill_intervals, scheduler_intervals
+from easyflow.sdk import DAG
 from easyflow.cli import main
 
 
 def test_cron_latest_interval_skips_weekend() -> None:
-    interval = latest_ended_interval(
-        "30 9 * * 1-5",
-        datetime(2026, 7, 6, 10, 0, tzinfo=timezone.utc),
+    dag = DAG(
+        "cron",
+        schedule="30 9 * * 1-5",
+        start_date=datetime(2026, 7, 1, tzinfo=timezone.utc),
     )
+    interval = scheduler_intervals(
+        dag, datetime(2026, 7, 6, 10, 0, tzinfo=timezone.utc)
+    )[0]
 
     assert interval is not None
-    assert interval.logical_date == datetime(2026, 7, 3, 9, 30, tzinfo=timezone.utc)
-    assert interval.data_interval_start == datetime(2026, 7, 3, 9, 30, tzinfo=timezone.utc)
-    assert interval.data_interval_end == datetime(2026, 7, 6, 9, 30, tzinfo=timezone.utc)
+    assert interval.logical_date == datetime(2026, 7, 6, 9, 30, tzinfo=timezone.utc)
+    assert interval.data_interval_start == datetime(
+        2026, 7, 6, 9, 30, tzinfo=timezone.utc
+    )
+    assert interval.data_interval_end == datetime(
+        2026, 7, 6, 9, 30, tzinfo=timezone.utc
+    )
 
 
 def test_cron_backfill_includes_end_date_and_skips_weekend() -> None:
@@ -33,7 +42,9 @@ def test_cron_backfill_includes_end_date_and_skips_weekend() -> None:
         datetime(2026, 7, 3, 9, 30, tzinfo=timezone.utc),
         datetime(2026, 7, 6, 9, 30, tzinfo=timezone.utc),
     ]
-    assert intervals[0].data_interval_end == datetime(2026, 7, 6, 9, 30, tzinfo=timezone.utc)
+    assert intervals[0].data_interval_end == datetime(
+        2026, 7, 3, 9, 30, tzinfo=timezone.utc
+    )
 
 
 def test_croniter_extended_last_day_expression_is_supported() -> None:
@@ -46,10 +57,14 @@ def test_croniter_extended_last_day_expression_is_supported() -> None:
     assert [interval.logical_date for interval in intervals] == [
         datetime(2026, 7, 31, 0, 0, tzinfo=timezone.utc)
     ]
-    assert intervals[0].data_interval_end == datetime(2026, 8, 31, 0, 0, tzinfo=timezone.utc)
+    assert intervals[0].data_interval_end == datetime(
+        2026, 7, 31, 0, 0, tzinfo=timezone.utc
+    )
 
 
-def test_cron_rejects_second_level_expression_until_scheduler_supports_seconds() -> None:
+def test_cron_rejects_second_level_expression_until_scheduler_supports_seconds() -> (
+    None
+):
     with pytest.raises(ValueError, match="5 字段"):
         validate_cron("*/15 * * * * *")
 
@@ -112,10 +127,11 @@ def test_dags_list_and_scheduler_scan_dags_folder(tmp_path, capsys) -> None:
     cron_output = tmp_path / "cron.txt"
     (dags_folder / "daily.py").write_text(
         f"""
+from datetime import datetime, timezone
 from pathlib import Path
 from easyflow.sdk import DAG, get_current_context, task
 
-with DAG("daily_dir", schedule="@daily") as dag:
+with DAG("daily_dir", schedule="@daily", start_date=datetime(2026, 7, 1, tzinfo=timezone.utc)) as dag:
     @task
     def write_daily():
         Path({str(daily_output)!r}).write_text(get_current_context()["ds"])
@@ -126,10 +142,11 @@ with DAG("daily_dir", schedule="@daily") as dag:
     )
     (dags_folder / "cron.py").write_text(
         f"""
+from datetime import datetime, timezone
 from pathlib import Path
 from easyflow.sdk import DAG, get_current_context, task
 
-with DAG("cron_dir", schedule="0 0 * * *") as dag:
+with DAG("cron_dir", schedule="0 0 * * *", start_date=datetime(2026, 7, 1, tzinfo=timezone.utc)) as dag:
     @task
     def write_cron():
         Path({str(cron_output)!r}).write_text(get_current_context()["ds"])
@@ -163,10 +180,10 @@ with DAG("cron_dir", schedule="0 0 * * *") as dag:
         == 0
     )
     scheduler_out = capsys.readouterr().out
-    assert "cron_dir scheduled__2026-07-07T00:00:00+00:00 success" in scheduler_out
-    assert "daily_dir scheduled__2026-07-07T00:00:00+00:00 success" in scheduler_out
-    assert cron_output.read_text() == "2026-07-07"
-    assert daily_output.read_text() == "2026-07-07"
+    assert "cron_dir scheduled__2026-07-08T00:00:00+00:00 success" in scheduler_out
+    assert "daily_dir scheduled__2026-07-08T00:00:00+00:00 success" in scheduler_out
+    assert cron_output.read_text() == "2026-07-08"
+    assert daily_output.read_text() == "2026-07-08"
 
 
 def test_trigger_and_backfill_can_resolve_dag_from_folder(tmp_path, capsys) -> None:
@@ -211,7 +228,10 @@ with DAG("folder_job", schedule="@daily") as dag:
         )
         == 0
     )
-    assert "folder_job manual__2026-07-06T00:00:00+00:00 success" in capsys.readouterr().out
+    assert (
+        "folder_job manual__2026-07-06T00:00:00+00:00 success"
+        in capsys.readouterr().out
+    )
 
     assert (
         main(

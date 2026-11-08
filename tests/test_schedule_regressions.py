@@ -15,13 +15,22 @@ from easyflow.sdk import DAG
 UTC = timezone.utc
 
 
-def test_timedelta_uses_stable_anchor_and_start_end_constraints():
+def test_timedelta_trigger_uses_current_time_and_respects_run_history():
     start = datetime(2026, 7, 1, 10, 10, tzinfo=UTC)
     dag = DAG("delta", schedule=timedelta(hours=1), start_date=start)
     first = scheduler_intervals(dag, start + timedelta(hours=2, minutes=15))
-    second = scheduler_intervals(dag, start + timedelta(hours=2, minutes=15, seconds=5))
-    assert first == second
-    assert first[0].logical_date == start + timedelta(hours=1)
+    second = scheduler_intervals(
+        dag,
+        start + timedelta(hours=2, minutes=15, seconds=5),
+        last_automated_date=first[0].logical_date,
+    )
+    assert second == []
+    assert first[0].logical_date == start + timedelta(hours=2, minutes=15)
+    assert (
+        first[0].data_interval_start
+        == first[0].data_interval_end
+        == first[0].logical_date
+    )
     assert scheduler_intervals(dag, start - timedelta(minutes=1)) == []
     dag.catchup = True
     dag.end_date = start + timedelta(hours=1, minutes=30)
@@ -31,12 +40,13 @@ def test_timedelta_uses_stable_anchor_and_start_end_constraints():
     unanchored = DAG("unanchored", schedule=timedelta(hours=7))
     point = datetime(2026, 7, 8, 23, tzinfo=UTC)
     scheduled = scheduler_intervals(unanchored, point)[0]
+    assert scheduled.logical_date == point
     backfilled = backfill_intervals(
         unanchored.schedule,
         scheduled.logical_date.date(),
         scheduled.logical_date.date(),
     )
-    assert scheduled in backfilled
+    assert [item.logical_date.hour for item in backfilled] == [0, 7, 14, 21]
     assert scheduler_intervals(unanchored, datetime(1969, 12, 31, tzinfo=UTC))
 
 
@@ -49,14 +59,33 @@ def test_boundaries_are_not_floored_before_start_and_stop_at_end():
         end_date=datetime(2026, 7, 3, tzinfo=UTC),
         catchup=True,
     )
-    assert scheduler_intervals(dag, datetime(2026, 7, 2, 12, tzinfo=UTC)) == []
+    assert [
+        item.logical_date
+        for item in scheduler_intervals(dag, datetime(2026, 7, 2, 12, tzinfo=UTC))
+    ] == [datetime(2026, 7, 2, tzinfo=UTC)]
     result = scheduler_intervals(dag, datetime(2026, 7, 10, tzinfo=UTC))
     assert [i.logical_date for i in result] == [
         datetime(2026, 7, 2, tzinfo=UTC),
         datetime(2026, 7, 3, tzinfo=UTC),
     ]
     dag.catchup = False
-    assert scheduler_intervals(dag, datetime(2026, 7, 10, tzinfo=UTC)) == result[-1:]
+    assert scheduler_intervals(dag, datetime(2026, 7, 10, tzinfo=UTC)) == []
+
+
+def test_cron_without_start_date_waits_until_near_next_tick():
+    dag = DAG("no_start", schedule="@daily")
+    noon = datetime(2026, 7, 8, 12, tzinfo=UTC)
+    assert scheduler_intervals(dag, noon) == []
+    near_tick = datetime(2026, 7, 9, 0, 1, tzinfo=UTC)
+    first = scheduler_intervals(dag, near_tick)
+    assert [item.logical_date for item in first] == [datetime(2026, 7, 9, tzinfo=UTC)]
+    next_day_noon = datetime(2026, 7, 10, 12, tzinfo=UTC)
+    following = scheduler_intervals(
+        dag, next_day_noon, last_automated_date=first[0].logical_date
+    )
+    assert [item.logical_date for item in following] == [
+        datetime(2026, 7, 10, tzinfo=UTC)
+    ]
 
 
 def test_once_is_deduplicated_and_backfill_terminates(tmp_path):
@@ -129,8 +158,8 @@ with DAG("tz", schedule="0 9 * * *", start_date=datetime(2026, 7, 1, 9, tzinfo=t
     )
     run_id = summaries[0].run_id
     assert store.pull_xcom("tz", run_id, "context_values", "return_value") == [
-        "2026-07-07",
-        "2026-07-07T09:00:00+08:00",
+        "2026-07-08",
+        "2026-07-08T09:00:00+08:00",
         "2026-07-08T09:00:00+08:00",
     ]
     backfill = create_backfill(
@@ -143,7 +172,7 @@ with DAG("tz", schedule="0 9 * * *", start_date=datetime(2026, 7, 1, 9, tzinfo=t
     assert backfill.complete
     assert store.pull_xcom(
         "tz", backfill.runs[0].run_id, "context_values", "return_value"
-    )[1:] == ["2026-07-02T09:00:00+08:00", "2026-07-03T09:00:00+08:00"]
+    )[1:] == ["2026-07-02T09:00:00+08:00", "2026-07-02T09:00:00+08:00"]
 
 
 def test_manual_context_preserves_timezone_and_saved_interval(tmp_path):
@@ -191,14 +220,14 @@ def test_cron_skips_spring_gap_and_orders_both_fall_folds():
 
 def test_backfill_intervals_follow_local_day_across_dst():
     zone = ZoneInfo("America/New_York")
-    intervals = backfill_intervals("@daily", date(2026, 3, 8), date(2026, 3, 8), zone)
-    assert len(intervals) == 1
-    interval = intervals[0]
-    assert interval.data_interval_start.isoformat() == "2026-03-08T00:00:00-05:00"
-    assert interval.data_interval_end.isoformat() == "2026-03-09T00:00:00-04:00"
-    assert interval.data_interval_end.astimezone(
-        UTC
-    ) - interval.data_interval_start.astimezone(UTC) == timedelta(hours=23)
+    intervals = backfill_intervals("@daily", date(2026, 3, 8), date(2026, 3, 9), zone)
+    assert len(intervals) == 2
+    assert intervals[0].data_interval_start.isoformat() == "2026-03-08T00:00:00-05:00"
+    assert intervals[0].data_interval_end == intervals[0].data_interval_start
+    assert intervals[1].data_interval_end.isoformat() == "2026-03-09T00:00:00-04:00"
+    assert intervals[1].logical_date.astimezone(UTC) - intervals[
+        0
+    ].logical_date.astimezone(UTC) == timedelta(hours=23)
 
 
 def test_local_executor_preserves_named_timezone_across_dst(tmp_path):
@@ -227,4 +256,4 @@ with DAG("local_tz", schedule="@daily", start_date=datetime(2026, 3, 1, tzinfo=Z
         == "success"
     )
     assert store.pull_xcom("local_tz", run, "values", "return_value") == expected
-    assert expected == ["America/New_York", "2026-03-09T00:00:00-04:00"]
+    assert expected == ["America/New_York", "2026-03-08T00:00:00-05:00"]

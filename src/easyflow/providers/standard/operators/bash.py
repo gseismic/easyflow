@@ -3,8 +3,12 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import tempfile
+from collections.abc import Container
+from contextlib import nullcontext
 from typing import Any
 
+from easyflow.sdk.exceptions import AirflowSkipException
 from easyflow.sdk.operators.base import BaseOperator
 
 
@@ -18,6 +22,7 @@ class BashOperator(BaseOperator):
         env: dict[str, str] | None = None,
         append_env: bool = False,
         cwd: str | None = None,
+        skip_on_exit_code: int | Container[int] | None = 99,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -25,6 +30,14 @@ class BashOperator(BaseOperator):
         self.env = None if env is None else dict(env)
         self.append_env = append_env
         self.cwd = cwd
+        self.skip_on_exit_code = (
+            ()
+            if skip_on_exit_code is None
+            else (skip_on_exit_code,)
+            if isinstance(skip_on_exit_code, int)
+            else skip_on_exit_code
+        )
+        self.set_xcom_dependencies()
 
     def execute(self, context: dict[str, Any]) -> str:
         env = (
@@ -38,20 +51,31 @@ class BashOperator(BaseOperator):
             if os.path.isfile("/bin/bash")
             else shutil.which("bash") or "bash"
         )
-        completed = subprocess.run(
-            [bash, "-c", self.bash_command],
-            cwd=self.cwd,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
+        directory = (
+            tempfile.TemporaryDirectory(prefix="easyflow-")
+            if self.cwd is None
+            else nullcontext(self.cwd)
         )
-        if completed.stdout:
-            print(completed.stdout, end="")
-        if completed.stderr:
-            print(completed.stderr, end="")
-        if completed.returncode != 0:
-            raise RuntimeError(
-                f"Bash command failed with exit code {completed.returncode}: {self.bash_command}"
+        with directory as cwd:
+            with subprocess.Popen(
+                [bash, "-c", self.bash_command],
+                cwd=cwd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            ) as process:
+                assert process.stdout is not None
+                last_line = ""
+                for line in process.stdout:
+                    print(line, end="", flush=True)
+                    last_line = line.rstrip("\r\n")
+                returncode = process.wait()
+        if returncode in self.skip_on_exit_code:
+            raise AirflowSkipException(
+                f"Bash command skipped with exit code {returncode}."
             )
-        return completed.stdout
+        if returncode != 0:
+            raise RuntimeError(f"Bash command failed with exit code {returncode}.")
+        return last_line

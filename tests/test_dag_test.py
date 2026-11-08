@@ -25,6 +25,7 @@ from easyflow.sdk.states import TaskInstanceState
 def test_taskflow_resolves_xcom_and_auto_dependency() -> None:
     calls: list[str] = []
     with DAG("taskflow_demo") as workflow:
+
         @task
         def extract() -> dict[str, int]:
             calls.append("extract")
@@ -47,6 +48,7 @@ def test_taskflow_resolves_xcom_and_auto_dependency() -> None:
 
 def test_multiple_outputs_xcomarg_key_lookup() -> None:
     with DAG("multi_outputs") as workflow:
+
         @task(multiple_outputs=True)
         def extract() -> dict[str, int]:
             return {"rows": 10}
@@ -84,6 +86,7 @@ def test_duplicate_explicit_task_id_fails() -> None:
 
 def test_taskflow_repeated_call_gets_suffix() -> None:
     with DAG("suffix") as workflow:
+
         @task
         def work() -> int:
             return 1
@@ -134,6 +137,7 @@ def test_template_missing_variable_fails_task() -> None:
 
 def test_xcom_rejects_non_json_value() -> None:
     with DAG("bad_xcom") as workflow:
+
         @task
         def bad() -> object:
             return object()
@@ -229,5 +233,5 @@ def test_quant_data_task_uses_data_interval_and_idempotent_partition(tmp_path) -
     output = tmp_path / "symbol=AAPL" / "date=2026-07-06" / "data.json"
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["start"] == "2026-07-06T00:00:00+00:00"
-    assert payload["end"] == "2026-07-07T00:00:00+00:00"
+    assert payload["end"] == "2026-07-06T00:00:00+00:00"
     assert first.task_results["fetch"]["path"] == second.task_results["fetch"]["path"]

@@ -126,7 +126,7 @@ def test_capacity_is_atomic_for_simultaneous_manual_creations(tmp_path):
     assert store.count_active_dag_runs(dag_id="race") == 1
 
 
-def test_backfill_capacity_and_cli_trigger_report_incomplete(tmp_path, capsys):
+def test_backfill_capacity_is_independent_of_manual_trigger(tmp_path, capsys):
     path = _write(
         tmp_path / "capacity.py",
         'from easyflow.sdk import DAG\ndag = DAG("limited", schedule="@daily", max_active_runs=1)\n',
@@ -148,7 +148,7 @@ def test_backfill_capacity_and_cli_trigger_report_incomplete(tmp_path, capsys):
         end_date=date(2026, 7, 2),
         max_active_runs=2,
     )
-    assert not summary.complete and len(summary.pending) == 2 and summary.runs == []
+    assert summary.complete and len(summary.runs) == 2
     assert (
         main(
             [
@@ -166,9 +166,9 @@ def test_backfill_capacity_and_cli_trigger_report_incomplete(tmp_path, capsys):
                 url,
             ]
         )
-        == 1
+        == 0
     )
-    assert "未完成" in capsys.readouterr().err
+    assert "backfill_id=" in capsys.readouterr().out
     assert (
         main(["dags", "trigger", "limited", "--file", str(path), "--database-url", url])
         == 1
@@ -306,7 +306,7 @@ def _compete_for_capacity(url, path, barrier, queue, kind):
         queue.put("full")
 
 
-def test_backfill_and_manual_capacity_compete_across_processes(tmp_path):
+def test_backfill_and_manual_capacity_are_independent_across_processes(tmp_path):
     import multiprocessing
 
     path = _write(
@@ -329,8 +329,11 @@ def test_backfill_and_manual_capacity_compete_across_processes(tmp_path):
     for process in processes:
         process.join(8)
         assert process.exitcode == 0
-    assert sorted([queue.get(timeout=2), queue.get(timeout=2)]) == ["created", "full"]
-    assert store.count_active_dag_runs(dag_id="process_race") == 1
+    assert sorted([queue.get(timeout=2), queue.get(timeout=2)]) == [
+        "created",
+        "created",
+    ]
+    assert store.count_active_dag_runs(dag_id="process_race") == 2
 
 
 def test_daemon_keeps_lease_during_idle_interval(tmp_path):
@@ -377,7 +380,7 @@ def test_daemon_keeps_lease_during_idle_interval(tmp_path):
     assert not thread.is_alive() and not errors
 
 
-def test_backfill_limit_counts_its_own_runs_and_dag_limit_counts_all(tmp_path):
+def test_backfill_limit_counts_its_own_runs_and_dag_limit_excludes_backfills(tmp_path):
     store = SQLiteStateStore(f"sqlite:///{tmp_path / 'db.sqlite'}")
     dag = DAG("scope", schedule="@daily", max_active_runs=3)
     runner = PersistentDagRunner(store)
@@ -405,9 +408,15 @@ def test_backfill_limit_counts_its_own_runs_and_dag_limit_counts_all(tmp_path):
         backfill_id="b2",
         max_active_runs=1,
     )
+    runner.create_manual_run(
+        dag, file_path=None, logical_date=logical, run_id="manual2"
+    )
+    runner.create_manual_run(
+        dag, file_path=None, logical_date=logical, run_id="manual3"
+    )
     with pytest.raises(DagRunCapacityError, match="DAG"):
         runner.create_manual_run(
-            dag, file_path=None, logical_date=logical, run_id="manual2"
+            dag, file_path=None, logical_date=logical, run_id="manual4"
         )
 
 

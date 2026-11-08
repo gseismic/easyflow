@@ -2,6 +2,7 @@ from easyflow.sdk.context import Context, get_current_context
 from easyflow.sdk.dag import DAG, dag
 from easyflow.sdk.decorators import task
 from easyflow.sdk.exceptions import (
+    AirflowSkipException,
     ContextNotAvailableError,
     DagCycleError,
     DagDefinitionError,
@@ -22,6 +23,7 @@ from easyflow.sdk.xcom import XComArg
 
 __all__ = [
     "DAG",
+    "AirflowSkipException",
     "BaseOperator",
     "Context",
     "ContextNotAvailableError",

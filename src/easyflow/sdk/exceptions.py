@@ -4,6 +4,12 @@ class EasyflowError(Exception):
     error_code = "EASYFLOW_ERROR"
 
 
+class AirflowSkipException(EasyflowError):
+    """任务主动跳过，不消耗重试次数。"""
+
+    error_code = "TASK_SKIPPED"
+
+
 class DagDefinitionError(EasyflowError):
     error_code = "DAG_DEFINITION_ERROR"
 

@@ -15,10 +15,11 @@ def test_scheduler_once_creates_latest_daily_run_and_deduplicates(tmp_path) -> N
     marker = tmp_path / "marker.txt"
     dag_file.write_text(
         f"""
+from datetime import datetime, timezone
 from pathlib import Path
 from easyflow.sdk import DAG, get_current_context, task
 
-with DAG("daily_job", schedule="@daily") as dag:
+with DAG("daily_job", schedule="@daily", start_date=datetime(2026, 7, 1, tzinfo=timezone.utc)) as dag:
     @task
     def write_marker():
         context = get_current_context()
@@ -50,7 +51,7 @@ with DAG("daily_job", schedule="@daily") as dag:
     assert len(first) == 1
     assert first[0].state.value == "success"
     assert second == []
-    assert marker.read_text() == "2026-07-07"
+    assert marker.read_text() == "2026-07-08"
     assert store.count_dag_runs(dag_id="daily_job", run_type="scheduled") == 1
 
 
@@ -86,11 +87,15 @@ with DAG("active_limit", schedule="@daily", max_active_runs=1) as dag:
             dag_id="active_limit",
             file_path=dag_file,
             store=store,
-            now=__import__("datetime").datetime.fromisoformat("2026-07-08T12:00:00+00:00"),
+            now=__import__("datetime").datetime.fromisoformat(
+                "2026-07-08T12:00:00+00:00"
+            ),
             log_root=tmp_path / "logs",
         )
 
-    assert [(run.run_id, run.state.value) for run in created] == [("manual__still_queued", "queued")]
+    assert [(run.run_id, run.state.value) for run in created] == [
+        ("manual__still_queued", "queued")
+    ]
     assert store.count_dag_runs(dag_id="active_limit", run_type="scheduled") == 0
 
 
@@ -128,7 +133,11 @@ with DAG("daily_backfill", schedule="@daily") as dag:
     )
 
     assert summary.backfill_id == "bf_test"
-    assert [run.state.value for run in summary.runs] == ["success", "success", "success"]
+    assert [run.state.value for run in summary.runs] == [
+        "success",
+        "success",
+        "success",
+    ]
     assert output.read_text().splitlines() == [
         "2026-07-01",
         "2026-07-02",
@@ -182,7 +191,9 @@ with DAG("depends_job", schedule="@daily") as dag:
             ORDER BY dr.logical_date
             """
         ).fetchall()
-        tries = connection.execute("SELECT task_id, try_number FROM task_try").fetchall()
+        tries = connection.execute(
+            "SELECT task_id, try_number FROM task_try"
+        ).fetchall()
     assert states[0][1] == "failed"
     assert states[1][1] == "upstream_failed"
     assert tries == [("fragile", 1)]
@@ -194,10 +205,11 @@ def test_depends_on_past_ignores_manual_run_failure(tmp_path) -> None:
     output = tmp_path / "scheduled.txt"
     dag_file.write_text(
         f"""
+from datetime import datetime, timezone
 from pathlib import Path
 from easyflow.sdk import DAG, get_current_context, task
 
-with DAG("manual_isolated", schedule="@daily") as dag:
+with DAG("manual_isolated", schedule="@daily", start_date=datetime(2026, 7, 1, tzinfo=timezone.utc)) as dag:
     @task(depends_on_past=True)
     def work():
         context = get_current_context()
@@ -231,16 +243,17 @@ with DAG("manual_isolated", schedule="@daily") as dag:
     )
 
     assert [run.state.value for run in scheduled] == ["success"]
-    assert output.read_text() == "2026-07-07"
+    assert output.read_text() == "2026-07-08"
 
 
 def test_scheduler_cli_and_backfill_cli(tmp_path, capsys) -> None:
     dag_file = tmp_path / "cli_sched.py"
     dag_file.write_text(
         """
+from datetime import datetime, timezone
 from easyflow.sdk import DAG, task
 
-with DAG("cli_sched", schedule="@daily") as dag:
+with DAG("cli_sched", schedule="@daily", start_date=datetime(2026, 7, 1, tzinfo=timezone.utc)) as dag:
     @task
     def work():
         print("scheduled-log")
@@ -272,7 +285,7 @@ with DAG("cli_sched", schedule="@daily") as dag:
         )
         == 0
     )
-    assert "scheduled__2026-07-07T00:00:00+00:00 success" in capsys.readouterr().out
+    assert "scheduled__2026-07-08T00:00:00+00:00 success" in capsys.readouterr().out
 
     assert (
         main(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from pathlib import Path
 
 from easyflow.sdk import DAG, get_current_context, task
@@ -18,7 +19,9 @@ with DAG(
     def fetch_daily_prices() -> dict[str, object]:
         context = get_current_context()
         symbol = context["params"]["symbol"]
-        ds = context["ds"]
+        interval_end = context["logical_date"]
+        interval_start = interval_end - timedelta(days=1)
+        ds = interval_start.date().isoformat()
         data_root = Path(context["params"]["data_root"])
         partition = data_root / f"symbol={symbol}" / f"date={ds}"
         temp_file = partition / "data.tmp"
@@ -28,8 +31,8 @@ with DAG(
         payload = {
             "symbol": symbol,
             "date": ds,
-            "data_interval_start": context["data_interval_start"].isoformat(),
-            "data_interval_end": context["data_interval_end"].isoformat(),
+            "data_interval_start": interval_start.isoformat(),
+            "data_interval_end": interval_end.isoformat(),
             "rows": [{"close": 100.0}],
         }
         temp_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")

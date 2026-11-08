@@ -11,13 +11,22 @@ requires-python = ">=3.11"
 dependencies = [
     "croniter>=6.2.3,<7",
     "jinja2>=3.1",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "typer>=0.15,<1",
 ]
+
+[project.optional-dependencies]
+dev = ["httpx>=0.27", "pytest>=8", "ruff>=0.9"]
 
 [project.scripts]
 easyflow = "easyflow.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"easyflow.web" = ["static/*", "static/assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

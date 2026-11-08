@@ -8,7 +8,6 @@ from easyflow._internal.cron import (
     cron_next_after,
     cron_next_at_or_after,
     cron_previous_at_or_before,
-    cron_previous_before,
     is_cron_schedule,
     validate_cron,
 )
@@ -20,7 +19,7 @@ _PRESETS = {
     "@monthly": "0 0 1 * *",
     "@yearly": "0 0 1 1 *",
 }
-_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+MAX_CATCHUP_PER_SCAN = 1000
 
 
 @dataclass(frozen=True)
@@ -57,48 +56,66 @@ def validate_schedule(schedule: str | timedelta | None) -> None:
     raise ValueError(f"暂不支持 schedule {schedule!r}。")
 
 
-def scheduler_intervals(dag: Any, now: datetime) -> list[DataInterval]:
+def scheduler_intervals(
+    dag: Any, now: datetime, *, last_automated_date: datetime | None = None
+) -> list[DataInterval]:
     if now.tzinfo is None:
         raise ValueError("now 必须带时区。")
     schedule = dag.schedule
     if schedule is None:
         return []
     now = now.astimezone(dag_timezone(dag))
+    last = (
+        last_automated_date.astimezone(now.tzinfo)
+        if last_automated_date is not None
+        else None
+    )
     if schedule == "@once":
+        if last is not None:
+            return []
         logical_date = dag.start_date or now
         if _utc(logical_date) > _utc(now) or (
             dag.end_date and _utc(logical_date) > _utc(dag.end_date)
         ):
             return []
         return [DataInterval(logical_date, logical_date, logical_date)]
-    anchor = dag.start_date or _EPOCH
-    latest = latest_ended_interval(schedule, now, anchor=anchor)
-    if latest is None:
-        return []
-    if dag.end_date is not None and _utc(latest.logical_date) > _utc(dag.end_date):
-        end = dag.end_date.astimezone(now.tzinfo)
-        if isinstance(schedule, timedelta):
-            count = (_utc(end) - _utc(anchor)) // schedule
-            last_start = (_utc(anchor) + count * schedule).astimezone(now.tzinfo)
-        else:
-            last_start = cron_previous_at_or_before(_expression(schedule), end)
-        latest = interval_for_logical_date(schedule, last_start)
-    if latest is None or (
-        dag.start_date is not None and _utc(latest.logical_date) < _utc(dag.start_date)
-    ):
-        return []
-    if not dag.catchup or dag.start_date is None:
-        return [latest]
+
+    if last is not None:
+        first = next_logical_date(schedule, last)
+    elif dag.start_date is not None:
+        first = (
+            dag.start_date.astimezone(now.tzinfo)
+            if isinstance(schedule, timedelta)
+            else cron_next_at_or_after(
+                _expression(schedule), dag.start_date.astimezone(now.tzinfo)
+            )
+        )
+    elif isinstance(schedule, timedelta):
+        first = now
+    else:
+        previous = cron_previous_at_or_before(_expression(schedule), now)
+        following = cron_next_after(_expression(schedule), previous)
+        tolerance = max((_utc(following) - _utc(previous)) / 10, timedelta(minutes=5))
+        first = previous if _utc(now) - _utc(previous) <= tolerance else following
+
+    if not dag.catchup:
+        latest = (
+            now
+            if isinstance(schedule, timedelta)
+            else cron_previous_at_or_before(_expression(schedule), now)
+        )
+        if _utc(first) > _utc(latest):
+            return []
+        first = latest
+
     intervals: list[DataInterval] = []
-    current = _ceil_logical_date(schedule, dag.start_date, anchor=anchor)
-    while _utc(current) <= _utc(latest.logical_date):
-        interval = interval_for_logical_date(schedule, current)
-        if _utc(interval.data_interval_end) > _utc(now):
+    while _utc(first) <= _utc(now) and len(intervals) < MAX_CATCHUP_PER_SCAN:
+        if dag.end_date is not None and _utc(first) > _utc(dag.end_date):
             break
-        if dag.end_date is not None and _utc(current) > _utc(dag.end_date):
+        intervals.append(interval_for_logical_date(schedule, first))
+        if not dag.catchup:
             break
-        intervals.append(interval)
-        current = next_logical_date(schedule, current)
+        first = next_logical_date(schedule, first)
     return intervals
 
 
@@ -122,7 +139,7 @@ def backfill_intervals(
             if start_date <= logical.date() <= end_date
             else []
         )
-    current = _ceil_logical_date(schedule, start, anchor=anchor or _EPOCH)
+    current = _ceil_logical_date(schedule, start, anchor=anchor or start)
     intervals = []
     while current.date() <= end_date:
         intervals.append(interval_for_logical_date(schedule, current))
@@ -133,29 +150,10 @@ def backfill_intervals(
     return intervals
 
 
-def latest_ended_interval(
-    schedule: str | timedelta, now: datetime, *, anchor: datetime | None = None
-) -> DataInterval | None:
-    if isinstance(schedule, timedelta):
-        anchor_utc = _utc(anchor or _EPOCH)
-        count = (_utc(now) - anchor_utc) // schedule
-        start = (anchor_utc + (count - 1) * schedule).astimezone(now.tzinfo)
-        return interval_for_logical_date(schedule, start)
-    if schedule == "@once":
-        raise ValueError("@once 没有周期性区间。")
-    expression = _expression(schedule)
-    end = cron_previous_at_or_before(expression, now)
-    start = cron_previous_before(expression, end)
-    return DataInterval(start, start, end)
-
-
 def interval_for_logical_date(
     schedule: str | timedelta, logical_date: datetime
 ) -> DataInterval:
-    if schedule == "@once":
-        return DataInterval(logical_date, logical_date, logical_date)
-    end = next_logical_date(schedule, logical_date)
-    return DataInterval(logical_date, logical_date, end)
+    return DataInterval(logical_date, logical_date, logical_date)
 
 
 def next_logical_date(schedule: str | timedelta, logical_date: datetime) -> datetime:

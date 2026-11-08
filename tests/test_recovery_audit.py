@@ -16,8 +16,9 @@ def test_scheduler_lease_blocks_second_owner_until_expired(tmp_path) -> None:
     dag_file = tmp_path / "lease_dag.py"
     dag_file.write_text(
         """
+from datetime import datetime, timezone
 from easyflow.sdk import DAG, task
-with DAG("lease_job", schedule="@daily") as dag:
+with DAG("lease_job", schedule="@daily", start_date=datetime(2026, 7, 1, tzinfo=timezone.utc)) as dag:
     @task
     def work():
         return "ok"
@@ -39,8 +40,11 @@ with DAG("lease_job", schedule="@daily") as dag:
         )
 
     store.release_scheduler_lease(owner="other")
-    assert store.acquire_scheduler_lease(owner="other", lease_seconds=30,
-                                         now=datetime.now(timezone.utc) - timedelta(seconds=31)).acquired
+    assert store.acquire_scheduler_lease(
+        owner="other",
+        lease_seconds=30,
+        now=datetime.now(timezone.utc) - timedelta(seconds=31),
+    ).acquired
     result = run_scheduler_once(
         dag_id="lease_job",
         file_path=dag_file,
@@ -52,7 +56,9 @@ with DAG("lease_job", schedule="@daily") as dag:
     assert [run.state.value for run in result] == ["success"]
 
 
-def test_definition_hash_change_fails_unfinished_run_without_executing_new_code(tmp_path) -> None:
+def test_definition_hash_change_fails_unfinished_run_without_executing_new_code(
+    tmp_path,
+) -> None:
     marker = tmp_path / "marker.txt"
     dag_file = tmp_path / "hash_dag.py"
     dag_file.write_text(
@@ -95,7 +101,11 @@ with DAG("hash_job") as dag:
 
     assert result.state.value == "failed"
     assert not marker.exists()
-    assert ("dag_definition_changed", "hash_job", "manual__hash") in store.list_audit_actions()
+    assert (
+        "dag_definition_changed",
+        "hash_job",
+        "manual__hash",
+    ) in store.list_audit_actions()
 
 
 def test_tasks_clear_dry_run_execute_and_rerun(tmp_path, capsys) -> None:
@@ -158,7 +168,12 @@ with DAG("clear_job") as dag:
         == 0
     )
     assert "DRY-RUN clear candidates: work" in capsys.readouterr().out
-    assert SQLiteStateStore(db_url).get_task_state("clear_job", "manual__clear", "work").value == "success"
+    assert (
+        SQLiteStateStore(db_url)
+        .get_task_state("clear_job", "manual__clear", "work")
+        .value
+        == "success"
+    )
 
     assert (
         main(
@@ -225,7 +240,10 @@ with DAG("refuse") as dag:
         logical_date=datetime(2026, 7, 6, tzinfo=timezone.utc),
         run_id="manual__refuse",
     )
-    assert runner.run_existing(dag, run_id=run_id, file_path=dag_file).state.value == "success"
+    assert (
+        runner.run_existing(dag, run_id=run_id, file_path=dag_file).state.value
+        == "success"
+    )
 
     assert (
         main(

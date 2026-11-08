@@ -3,16 +3,21 @@ from __future__ import annotations
 import multiprocessing
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from easyflow._internal.dag_parser import definition_hash_for_dag, load_dag_from_file
+from easyflow._internal.dag_parser import (
+    PARSER_TIMEOUT_SECONDS,
+    definition_hash_for_dag,
+    load_dag_from_file,
+)
 from easyflow._internal.persistent_runner import (
     PersistentDagRunner,
     PersistentXComStore,
 )
 from easyflow._internal.state_store import (
+    DagPaused,
     SchedulerFence,
     SchedulerLeaseLost,
     SQLiteStateStore,
@@ -40,6 +45,7 @@ class LocalExecutor:
         conf: dict[str, Any],
         should_continue: Callable[[], bool] | None = None,
         scheduler_fence: SchedulerFence | None = None,
+        wait_for_retry: bool = True,
     ) -> None:
         self.store = store
         self.dag = dag
@@ -55,10 +61,13 @@ class LocalExecutor:
         self.conf = conf
         self.should_continue = should_continue or (lambda: True)
         self.scheduler_fence = scheduler_fence
+        self.wait_for_retry = wait_for_retry
 
     def run(self) -> dict[str, TaskInstanceState | None]:
         context = multiprocessing.get_context("spawn")
         active: dict[str, multiprocessing.Process] = {}
+        ready_events: dict[str, Any] = {}
+        started_at: dict[str, float] = {}
         ordered_tasks = self.dag.topological_sort()
         max_active = min(self.parallelism, self.max_active_tasks)
 
@@ -69,17 +78,33 @@ class LocalExecutor:
                     process.join()
                 return self.store.list_task_states(self.dag.dag_id, self.run_id)
             for task_id, process in list(active.items()):
+                if (
+                    process.is_alive()
+                    and not ready_events[task_id].is_set()
+                    and time.monotonic() - started_at[task_id] > PARSER_TIMEOUT_SECONDS
+                ):
+                    process.terminate()
+                    process.join()
                 if not process.is_alive():
                     process.join()
                     active.pop(task_id)
+                    ready_events.pop(task_id)
+                    started_at.pop(task_id)
                     if process.exitcode == 75:
                         for other in active.values():
                             other.terminate()
                             other.join()
                         raise SchedulerLeaseLost("scheduler lease 已丢失，停止调度。")
+                    if process.exitcode == 77:
+                        continue
                     state = self.store.get_task_state(
                         self.dag.dag_id, self.run_id, task_id
                     )
+                    if (
+                        process.exitcode == 0
+                        and state == TaskInstanceState.UP_FOR_RETRY
+                    ):
+                        continue
                     if state is None or state in {
                         TaskInstanceState.QUEUED,
                         TaskInstanceState.SCHEDULED,
@@ -108,6 +133,12 @@ class LocalExecutor:
                 return task_states
 
             progressed = False
+            waiting_retry = False
+            if self.store.is_dag_paused(self.dag.dag_id):
+                if active:
+                    time.sleep(0.05)
+                    continue
+                return task_states
             for task in ordered_tasks:
                 if len(active) >= max_active:
                     break
@@ -118,6 +149,13 @@ class LocalExecutor:
                     continue
                 if current_state == TaskInstanceState.RUNNING:
                     continue
+                if current_state == TaskInstanceState.UP_FOR_RETRY:
+                    retry_at = self.store.task_retry_at(
+                        self.dag.dag_id, self.run_id, task.task_id
+                    )
+                    if retry_at is not None and retry_at > datetime.now(timezone.utc):
+                        waiting_retry = True
+                        continue
                 past_decision = self.depends_on_past_decision(
                     dag_id=self.dag.dag_id,
                     run_id=self.run_id,
@@ -151,6 +189,7 @@ class LocalExecutor:
                     progressed = True
                     continue
 
+                ready = context.Event()
                 process = context.Process(
                     target=run_local_task_worker,
                     args=(
@@ -163,6 +202,7 @@ class LocalExecutor:
                         self.log_root,
                         self.task_lease_seconds,
                         self.scheduler_fence,
+                        ready,
                     ),
                 )
                 try:
@@ -174,10 +214,15 @@ class LocalExecutor:
                     progressed = True
                     continue
                 active[task.task_id] = process
+                ready_events[task.task_id] = ready
+                started_at[task.task_id] = time.monotonic()
                 progressed = True
 
             if not progressed:
                 if active:
+                    time.sleep(0.05)
+                    continue
+                if waiting_retry and self.wait_for_retry:
                     time.sleep(0.05)
                     continue
                 return task_states
@@ -208,6 +253,7 @@ def run_local_task_worker(
     log_root: str,
     task_lease_seconds: int,
     scheduler_fence: SchedulerFence | None = None,
+    ready: Any | None = None,
 ) -> None:
     store = SQLiteStateStore(database_url)
     record = store.get_dag_run(dag_id, run_id)
@@ -231,6 +277,8 @@ def run_local_task_worker(
         )
         return
     task = dag.get_task(task_id)
+    if ready is not None:
+        ready.set()
     runner = PersistentDagRunner(
         store,
         log_root=log_root,
@@ -248,6 +296,9 @@ def run_local_task_worker(
             ),
             conf=conf,
             xcom_store=xcom_store,
+            single_attempt=True,
         )
     except SchedulerLeaseLost:
         raise SystemExit(75)
+    except DagPaused:
+        raise SystemExit(77)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -38,3 +39,14 @@ class XComArg:
     def __rlshift__(self, other: Any) -> "XComArg":
         self.operator.__rlshift__(other)
         return self
+
+
+def iter_xcom_args(value: Any) -> Iterator[XComArg]:
+    if isinstance(value, XComArg):
+        yield value
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            yield from iter_xcom_args(item)
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        for item in value:
+            yield from iter_xcom_args(item)

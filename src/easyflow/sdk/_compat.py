@@ -4,7 +4,6 @@ from easyflow.sdk.exceptions import UnsupportedFeatureError
 
 DAG_UNSUPPORTED_KWARGS = {
     "access_control",
-    "auto_register",
     "concurrency",
     "dag_display_name",
     "dagrun_timeout",
@@ -28,6 +27,7 @@ DAG_UNSUPPORTED_KWARGS = {
 }
 
 OPERATOR_UNSUPPORTED_KWARGS = {
+    "execution_timeout",
     "executor",
     "executor_config",
     "inlets",
@@ -49,6 +49,19 @@ OPERATOR_UNSUPPORTED_KWARGS = {
     "task_group",
     "wait_for_downstream",
     "weight_rule",
+}
+
+OPERATOR_DEFAULT_ARG_KEYS = {
+    "owner",
+    "retries",
+    "retry_delay",
+    "retry_exponential_backoff",
+    "max_retry_delay",
+    "trigger_rule",
+    "depends_on_past",
+    "params",
+    "do_xcom_push",
+    "multiple_outputs",
 }
 
 

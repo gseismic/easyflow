@@ -9,9 +9,10 @@ from typing import Any
 
 from jinja2 import Environment, StrictUndefined, TemplateError
 
-from easyflow.sdk.context import set_current_context
+from easyflow.sdk.context import DagRunContext, TaskInstanceContext, set_current_context
 from easyflow.sdk.dag import DAG, DagTestResult
 from easyflow.sdk.exceptions import (
+    AirflowSkipException,
     TemplateRenderError,
     XComSerializationError,
     XComValueTooLargeError,
@@ -42,6 +43,10 @@ class InMemoryXComStore:
 
     def pull(self, task_id: str, key: str = RETURN_VALUE_KEY) -> Any:
         return json.loads(self.values[(task_id, key)])
+
+    def clear_task(self, task_id: str) -> None:
+        for stored_key in [key for key in self.values if key[0] == task_id]:
+            del self.values[stored_key]
 
 
 def _json_validate(value: Any) -> bytes:
@@ -213,7 +218,11 @@ def _run_task_with_retries(
             if task.do_xcom_push:
                 _push_result(task, result, xcom_store)
             return TaskInstanceState.SUCCESS
+        except AirflowSkipException:
+            xcom_store.clear_task(task.task_id)
+            return TaskInstanceState.SKIPPED
         except Exception as exc:
+            xcom_store.clear_task(task.task_id)
             last_error = exc
             if try_numbers[task.task_id] <= retries:
                 continue
@@ -277,13 +286,14 @@ def _build_context(
 ) -> dict[str, Any]:
     params = dict(dag.params)
     params.update(task.params)
-    params.update(run_conf.get("params", {}))
+    params.update(run_conf)
+    task_instance = TaskInstanceContext(dag.dag_id, task.task_id, run_id, xcom_store)
     return {
         "dag": dag,
         "task": task,
-        "ti": {"task_id": task.task_id, "run_id": run_id},
-        "task_instance": {"task_id": task.task_id, "run_id": run_id},
-        "dag_run": {"dag_id": dag.dag_id, "run_id": run_id, "conf": run_conf},
+        "ti": task_instance,
+        "task_instance": task_instance,
+        "dag_run": DagRunContext(dag.dag_id, run_id, run_conf, logical_date),
         "run_id": run_id,
         "logical_date": logical_date,
         "data_interval_start": data_interval_start,
@@ -311,14 +321,20 @@ def _render_template_fields(task: Any, context: dict[str, Any]) -> None:
 
 
 def _render_value(value: Any, env: Environment, context: dict[str, Any]) -> Any:
+    if isinstance(value, XComArg):
+        return resolve_xcom_args(value, context["_xcom_store"])
     if isinstance(value, str):
         return env.from_string(value).render(context)
     if isinstance(value, list):
         return [_render_value(item, env, context) for item in value]
     if isinstance(value, tuple):
         return tuple(_render_value(item, env, context) for item in value)
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {key: _render_value(item, env, context) for key, item in value.items()}
+    if isinstance(value, set):
+        return {_render_value(item, env, context) for item in value}
+    if isinstance(value, frozenset):
+        return frozenset(_render_value(item, env, context) for item in value)
     return value
 
 

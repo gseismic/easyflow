@@ -1,23 +1,31 @@
 from __future__ import annotations
 
-import argparse
 import json
 import sys
+from contextlib import closing
 from datetime import date, datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Annotated
+
+import click
+import typer
 
 from easyflow._internal.dag_parser import (
+    AsyncDagDiscovery,
     DagParseIssue,
     DagSource,
     discover_dag_sources,
     inspect_dags_from_file,
+    load_dag_from_file,
 )
 from easyflow._internal.persistent_runner import PersistentDagRunner
 from easyflow._internal.scheduler import (
     ScheduledRunSummary,
+    SchedulerCoordinator,
     SchedulerIssue,
-    _run_sources_with_lease,
     create_backfill,
+    preview_backfill,
     run_scheduler_loop,
     run_scheduler_once_for_sources,
     scheduler_session,
@@ -28,377 +36,414 @@ DEFAULT_DATABASE_URL = "sqlite:///./.easyflow/easyflow.db"
 DEFAULT_LOG_ROOT = "./.easyflow/logs"
 DEFAULT_DAGS_FOLDER = "dags"
 
+app = typer.Typer(
+    help="单机工作流调度与管理。", no_args_is_help=True, add_completion=False
+)
+db_app = typer.Typer(help="管理状态库。", no_args_is_help=True)
+dags_app = typer.Typer(help="管理 DAG。", no_args_is_help=True)
+tasks_app = typer.Typer(help="管理任务实例。", no_args_is_help=True)
+backfill_app = typer.Typer(help="回补历史运行。", no_args_is_help=True)
+app.add_typer(db_app, name="db")
+app.add_typer(dags_app, name="dags")
+app.add_typer(tasks_app, name="tasks")
+app.add_typer(backfill_app, name="backfill")
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="easyflow")
-    subparsers = parser.add_subparsers(dest="command")
 
-    db_parser = subparsers.add_parser("db", help="管理 easyflow 状态库")
-    db_subparsers = db_parser.add_subparsers(dest="db_command")
-    db_init = db_subparsers.add_parser("init", help="初始化 SQLite 状态库")
-    db_init.add_argument(
-        "--database-url",
-        default=DEFAULT_DATABASE_URL,
-        help="SQLite 数据库 URL，默认 sqlite:///./.easyflow/easyflow.db",
+def _configure_parallelism(store: SQLiteStateStore, requested: int | None) -> int:
+    return store.configure_parallelism(
+        1 if requested is None else requested, override=requested is not None
     )
 
-    dags_parser = subparsers.add_parser("dags", help="DAG 命令")
-    dags_subparsers = dags_parser.add_subparsers(dest="dags_command")
-    dags_list = dags_subparsers.add_parser("list", help="列出 DAG 文件中的 DAG")
-    dags_list.add_argument("--file", help="只解析指定 DAG 文件")
-    dags_list.add_argument(
-        "--dags-folder", default=DEFAULT_DAGS_FOLDER, help="DAG 目录，默认 dags"
-    )
-    dags_list.add_argument("--dag-id", help="只列出指定 DAG")
 
-    trigger = dags_subparsers.add_parser("trigger", help="创建并同步执行手动 DagRun")
-    trigger.add_argument("dag_id")
-    trigger.add_argument("--file", help="包含 DAG 定义的 Python 文件")
-    trigger.add_argument(
-        "--dags-folder",
-        default=DEFAULT_DAGS_FOLDER,
-        help="未传 --file 时扫描的 DAG 目录",
-    )
-    trigger.add_argument("--run-id", help="自定义 run_id，默认 manual__<logical_date>")
-    trigger.add_argument(
-        "--logical-date",
-        help="带时区 ISO datetime，默认当前 UTC 时间",
-    )
-    trigger.add_argument("--conf-json", default="{}", help="DagRun conf JSON")
-    trigger.add_argument("--database-url", default=DEFAULT_DATABASE_URL)
-    trigger.add_argument("--log-root", default=DEFAULT_LOG_ROOT)
-    trigger.add_argument(
-        "--executor", choices=["sequential", "local"], default="sequential"
-    )
-    trigger.add_argument("--parallelism", type=int, default=1)
+def _error(message: str, code: int = 1) -> None:
+    typer.echo(message, err=True)
+    raise typer.Exit(code)
 
-    state = dags_subparsers.add_parser("state", help="查询 DagRun 状态")
-    state.add_argument("dag_id")
-    state.add_argument("run_id")
-    state.add_argument("--database-url", default=DEFAULT_DATABASE_URL)
 
-    dags_subparsers.add_parser("test", help="后续里程碑实现完整 Airflow 风格 test CLI")
+def _source(dag_id: str, file: str | None, dags_folder: str) -> DagSource:
+    try:
+        source, issues = _resolve_single_dag_source(
+            dag_id=dag_id, file_path=file, dags_folder=dags_folder
+        )
+    except ValueError as exc:
+        _error(str(exc))
+    _print_dag_parse_issues(issues)
+    return source
 
-    tasks_parser = subparsers.add_parser("tasks", help="Task 命令")
-    tasks_subparsers = tasks_parser.add_subparsers(dest="tasks_command")
-    task_state = tasks_subparsers.add_parser("state", help="查询 TaskInstance 状态")
-    task_state.add_argument("dag_id")
-    task_state.add_argument("run_id")
-    task_state.add_argument("task_id")
-    task_state.add_argument("--database-url", default=DEFAULT_DATABASE_URL)
 
-    task_logs = tasks_subparsers.add_parser("logs", help="读取 Task 最新 try 日志")
-    task_logs.add_argument("dag_id")
-    task_logs.add_argument("run_id")
-    task_logs.add_argument("task_id")
-    task_logs.add_argument("--database-url", default=DEFAULT_DATABASE_URL)
+@db_app.command("init")
+def db_init(database_url: str = DEFAULT_DATABASE_URL) -> None:
+    """初始化 SQLite 状态库。"""
+    path = SQLiteStateStore(database_url).init_db()
+    typer.echo(f"Initialized easyflow SQLite database at {path}")
 
-    task_clear = tasks_subparsers.add_parser(
-        "clear", help="清理 TaskInstance，允许重新执行"
-    )
-    task_clear.add_argument("dag_id")
-    task_clear.add_argument("--run-id", required=True)
-    task_clear.add_argument(
-        "--task-id",
-        action="append",
-        help="可重复传入；不传则 clear 当前 run 中可清理任务",
-    )
-    task_clear.add_argument("--dry-run", action="store_true")
-    task_clear.add_argument("--yes", action="store_true", help="确认执行危险操作")
-    task_clear.add_argument("--reason", default="")
-    task_clear.add_argument("--database-url", default=DEFAULT_DATABASE_URL)
 
-    scheduler_parser = subparsers.add_parser("scheduler", help="运行 scheduler")
-    scheduler_parser.add_argument(
-        "--once", action="store_true", help="只扫描并执行一次"
-    )
-    scheduler_parser.add_argument(
-        "--dag-id", help="只调度指定 DAG；不传则调度发现到的全部 DAG"
-    )
-    scheduler_parser.add_argument("--file", help="包含 DAG 定义的 Python 文件")
-    scheduler_parser.add_argument(
-        "--dags-folder",
-        default=DEFAULT_DAGS_FOLDER,
-        help="未传 --file 时扫描的 DAG 目录",
-    )
-    scheduler_parser.add_argument(
-        "--now", help="带时区 ISO datetime，测试或手动推进时使用"
-    )
-    scheduler_parser.add_argument("--database-url", default=DEFAULT_DATABASE_URL)
-    scheduler_parser.add_argument("--log-root", default=DEFAULT_LOG_ROOT)
-    scheduler_parser.add_argument(
-        "--owner", help="scheduler lease owner，默认使用当前进程"
-    )
-    scheduler_parser.add_argument("--lease-seconds", type=int, default=30)
-    scheduler_parser.add_argument("--interval-seconds", type=float, default=5.0)
-    scheduler_parser.add_argument(
-        "--max-loops", type=int, help="测试用：运行指定轮数后退出"
-    )
-    scheduler_parser.add_argument(
-        "--executor", choices=["sequential", "local"], default="sequential"
-    )
-    scheduler_parser.add_argument("--parallelism", type=int, default=1)
+@dags_app.command("list")
+def dags_list(
+    file: str | None = None,
+    dags_folder: str = DEFAULT_DAGS_FOLDER,
+    dag_id: str | None = None,
+) -> None:
+    """列出 DAG 和解析错误。"""
+    try:
+        sources, issues = _resolve_dag_sources(
+            file_path=file,
+            dags_folder=dags_folder,
+            dag_id=dag_id,
+            require_sources=False,
+        )
+    except ValueError as exc:
+        _error(str(exc))
+    _print_dag_parse_issues(issues)
+    if not sources:
+        typer.echo("No DAGs found.")
+        if issues:
+            raise typer.Exit(1)
+        return
+    for source in sources:
+        schedule = (
+            source.dag.schedule if source.dag.schedule is not None else "<manual>"
+        )
+        typer.echo(f"{source.dag_id}\t{source.file_path}\t{schedule}")
 
-    backfill_parser = subparsers.add_parser("backfill", help="Backfill 命令")
-    backfill_subparsers = backfill_parser.add_subparsers(dest="backfill_command")
-    backfill_create = backfill_subparsers.add_parser(
-        "create", help="创建并同步执行 backfill"
-    )
-    backfill_create.add_argument("--dag-id", required=True)
-    backfill_create.add_argument("--file", help="包含 DAG 定义的 Python 文件")
-    backfill_create.add_argument(
-        "--dags-folder",
-        default=DEFAULT_DAGS_FOLDER,
-        help="未传 --file 时扫描的 DAG 目录",
-    )
-    backfill_create.add_argument("--start-date", required=True, help="YYYY-MM-DD")
-    backfill_create.add_argument("--end-date", required=True, help="YYYY-MM-DD")
-    backfill_create.add_argument(
-        "--reprocessing-behavior",
-        choices=["none", "failed", "completed"],
-        default="none",
-    )
-    backfill_create.add_argument("--max-active-runs", type=int)
-    backfill_create.add_argument("--backfill-id")
-    backfill_create.add_argument("--database-url", default=DEFAULT_DATABASE_URL)
-    backfill_create.add_argument("--log-root", default=DEFAULT_LOG_ROOT)
-    backfill_create.add_argument(
-        "--executor", choices=["sequential", "local"], default="sequential"
-    )
-    backfill_create.add_argument("--parallelism", type=int, default=1)
 
-    return parser
+def _set_paused(dag_id: str, database_url: str, paused: bool) -> None:
+    SQLiteStateStore(database_url).set_dag_paused(dag_id, paused)
+    typer.echo(f"{dag_id} {'paused' if paused else 'unpaused'}")
+
+
+@dags_app.command("pause")
+def dags_pause(dag_id: str, database_url: str = DEFAULT_DATABASE_URL) -> None:
+    """暂停 DAG 调度。"""
+    _set_paused(dag_id, database_url, True)
+
+
+@dags_app.command("unpause")
+def dags_unpause(dag_id: str, database_url: str = DEFAULT_DATABASE_URL) -> None:
+    """恢复 DAG 调度。"""
+    _set_paused(dag_id, database_url, False)
+
+
+@dags_app.command("trigger")
+def dags_trigger(
+    dag_id: str,
+    file: str | None = None,
+    dags_folder: str = DEFAULT_DAGS_FOLDER,
+    run_id: str | None = None,
+    logical_date: str | None = None,
+    conf_json: str = "{}",
+    database_url: str = DEFAULT_DATABASE_URL,
+    log_root: str = DEFAULT_LOG_ROOT,
+    executor: str = "sequential",
+    parallelism: int | None = None,
+) -> None:
+    """创建并执行一次手动运行。"""
+    source = _source(dag_id, file, dags_folder)
+    store = SQLiteStateStore(database_url)
+    try:
+        conf = json.loads(conf_json)
+        if not isinstance(conf, dict):
+            raise ValueError("--conf-json 必须是 JSON 对象。")
+        chosen_parallelism = _configure_parallelism(store, parallelism)
+        runner = PersistentDagRunner(store, log_root=log_root)
+        created = runner.create_manual_run(
+            source.dag,
+            file_path=source.file_path,
+            logical_date=_parse_logical_date(logical_date),
+            run_id=run_id,
+            conf=conf,
+        )
+        result = runner.run_existing(
+            source.dag,
+            run_id=created,
+            file_path=source.file_path,
+            executor=executor,
+            parallelism=chosen_parallelism,
+        )
+    except (ValueError, DagRunCapacityError) as exc:
+        _error(str(exc))
+    typer.echo(f"{result.dag_id} {result.run_id} {result.state.value}")
+    if result.state.value != "success":
+        raise typer.Exit(1)
+
+
+@dags_app.command("state")
+def dags_state(
+    dag_id: str, run_id: str, database_url: str = DEFAULT_DATABASE_URL
+) -> None:
+    """查询运行状态。"""
+    record = SQLiteStateStore(database_url).get_dag_run(dag_id, run_id)
+    if record is None:
+        _error("DagRun not found")
+    typer.echo(record.state)
+
+
+@dags_app.command("test")
+def dags_test(
+    dag_id: str,
+    logical_date: str | None = None,
+    file: str | None = None,
+    dags_folder: str = DEFAULT_DAGS_FOLDER,
+    conf_json: str = "{}",
+) -> None:
+    """在当前进程测试 DAG，不写入运行状态库。"""
+    source = _source(dag_id, file, dags_folder)
+    try:
+        conf = json.loads(conf_json)
+        if not isinstance(conf, dict):
+            raise ValueError("--conf-json 必须是 JSON 对象。")
+        dag = load_dag_from_file(source.file_path, dag_id)
+        result = dag.test(logical_date=_parse_logical_date(logical_date), run_conf=conf)
+    except ValueError as exc:
+        _error(str(exc))
+    typer.echo(f"{dag_id} {result.run_id} {'success' if result.success else 'failed'}")
+    if not result.success:
+        raise typer.Exit(1)
+
+
+@tasks_app.command("state")
+def tasks_state(
+    dag_id: str, run_id: str, task_id: str, database_url: str = DEFAULT_DATABASE_URL
+) -> None:
+    """查询任务状态。"""
+    state = SQLiteStateStore(database_url).get_task_state(dag_id, run_id, task_id)
+    typer.echo(state.value if state else "NULL")
+
+
+@tasks_app.command("logs")
+def tasks_logs(
+    dag_id: str, run_id: str, task_id: str, database_url: str = DEFAULT_DATABASE_URL
+) -> None:
+    """读取任务最新一次尝试的日志。"""
+    log_path = SQLiteStateStore(database_url).latest_task_log_path(
+        dag_id, run_id, task_id
+    )
+    if log_path is None:
+        _error("Task log not found")
+    path = Path(log_path)
+    if not path.exists():
+        _error(f"Task log file not found: {path}")
+    typer.echo(path.read_text(encoding="utf-8"), nl=False)
+
+
+@tasks_app.command("clear")
+def tasks_clear(
+    dag_id: str,
+    run_id: Annotated[str, typer.Option("--run-id")],
+    task_id: Annotated[list[str] | None, typer.Option("--task-id")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    yes: Annotated[bool, typer.Option("--yes")] = False,
+    reason: str = "",
+    database_url: str = DEFAULT_DATABASE_URL,
+) -> None:
+    """预览或清理任务实例。"""
+    store = SQLiteStateStore(database_url)
+    preview = store.preview_clear_task_instances(
+        dag_id=dag_id, run_id=run_id, task_ids=task_id
+    )
+    _print_clear_result(preview)
+    if dry_run:
+        if preview.blocked:
+            raise typer.Exit(1)
+        return
+    if preview.blocked:
+        raise typer.Exit(1)
+    if not yes:
+        _error("缺少 --yes，未执行 clear。", 2)
+    result = store.clear_task_instances(
+        dag_id=dag_id, run_id=run_id, task_ids=task_id, actor="cli", reason=reason
+    )
+    _print_clear_result(result)
+    if result.blocked:
+        raise typer.Exit(1)
+
+
+@app.command("scheduler")
+def scheduler(
+    once: Annotated[bool, typer.Option("--once")] = False,
+    dag_id: str | None = None,
+    file: str | None = None,
+    dags_folder: str = DEFAULT_DAGS_FOLDER,
+    now: str | None = None,
+    database_url: str = DEFAULT_DATABASE_URL,
+    log_root: str = DEFAULT_LOG_ROOT,
+    owner: str | None = None,
+    lease_seconds: int = 30,
+    interval_seconds: float = 5.0,
+    max_loops: int | None = None,
+    executor: str = "sequential",
+    parallelism: int | None = None,
+) -> None:
+    """运行调度器。"""
+    try:
+        store = SQLiteStateStore(database_url)
+        chosen_parallelism = _configure_parallelism(store, parallelism)
+        if once:
+            sources, parse_issues = _resolve_dag_sources(
+                file_path=file,
+                dags_folder=dags_folder,
+                dag_id=dag_id,
+                require_sources=True,
+            )
+            _print_dag_parse_issues(parse_issues)
+            summaries, issues = run_scheduler_once_for_sources(
+                sources=sources,
+                store=store,
+                now=_parse_logical_date(now) if now else None,
+                log_root=log_root,
+                owner=owner,
+                lease_seconds=lease_seconds,
+                executor=executor,
+                parallelism=chosen_parallelism,
+            )
+        elif now:
+            _error("scheduler 常驻模式不接受 --now；请使用 --once。", 2)
+        elif file and dag_id:
+            summaries = run_scheduler_loop(
+                dag_id=dag_id,
+                file_path=file,
+                store=store,
+                log_root=log_root,
+                owner=owner,
+                lease_seconds=lease_seconds,
+                interval_seconds=interval_seconds,
+                max_loops=max_loops,
+                executor=executor,
+                parallelism=chosen_parallelism,
+            )
+            issues = []
+        else:
+            args = SimpleNamespace(
+                database_url=database_url,
+                owner=owner,
+                lease_seconds=lease_seconds,
+                log_root=log_root,
+                executor=executor,
+                parallelism=chosen_parallelism,
+                max_loops=max_loops,
+                file=file,
+                dags_folder=dags_folder,
+                dag_id=dag_id,
+                interval_seconds=interval_seconds,
+            )
+            summaries, issues = _run_scheduler_loop_for_sources(args)
+    except (RuntimeError, ValueError) as exc:
+        _error(str(exc))
+    _print_scheduler_issues(issues)
+    if not summaries:
+        typer.echo("No scheduled runs created.")
+        if issues:
+            raise typer.Exit(1)
+        return
+    for summary in summaries:
+        typer.echo(
+            f"{summary.dag_id or dag_id or '<unknown>'} {summary.run_id} {summary.state.value}"
+        )
+    if issues or any(summary.state.value != "success" for summary in summaries):
+        raise typer.Exit(1)
+
+
+@backfill_app.command("create")
+def backfill_create(
+    dag_id: Annotated[str, typer.Option("--dag-id")],
+    start_date: Annotated[str, typer.Option("--start-date")],
+    end_date: Annotated[str, typer.Option("--end-date")],
+    file: str | None = None,
+    dags_folder: str = DEFAULT_DAGS_FOLDER,
+    reprocessing_behavior: str = "none",
+    max_active_runs: int | None = None,
+    backfill_id: str | None = None,
+    database_url: str = DEFAULT_DATABASE_URL,
+    log_root: str = DEFAULT_LOG_ROOT,
+    executor: str = "sequential",
+    parallelism: int | None = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    """预览或创建回补。"""
+    source = _source(dag_id, file, dags_folder)
+    store = SQLiteStateStore(database_url)
+    try:
+        start, end = _parse_date(start_date), _parse_date(end_date)
+        if dry_run:
+            preview = preview_backfill(
+                dag=source.dag,
+                store=store,
+                start_date=start,
+                end_date=end,
+                reprocessing_behavior=reprocessing_behavior,
+            )
+            for item in preview:
+                state = item.latest_state.value if item.latest_state else "none"
+                typer.echo(
+                    f"{item.logical_date.isoformat()}\t{'create' if item.eligible else 'skip'}\t{state}"
+                )
+            typer.echo("预览基于当前状态，实际创建时会重新检查。")
+            return
+        chosen_parallelism = _configure_parallelism(store, parallelism)
+        summary = create_backfill(
+            dag_id=dag_id,
+            file_path=source.file_path,
+            store=store,
+            start_date=start,
+            end_date=end,
+            reprocessing_behavior=reprocessing_behavior,
+            max_active_runs=max_active_runs,
+            backfill_id=backfill_id,
+            log_root=log_root,
+            executor=executor,
+            parallelism=chosen_parallelism,
+        )
+    except ValueError as exc:
+        _error(str(exc), 2)
+    typer.echo(f"backfill_id={summary.backfill_id}")
+    for run in summary.runs:
+        typer.echo(f"{dag_id} {run.run_id} {run.state.value}")
+    if not summary.complete:
+        typer.echo(
+            f"backfill 未完成，待处理区间数: {len(summary.pending)}；已有运行可由 scheduler 继续。",
+            err=True,
+        )
+    if not summary.complete or any(
+        run.state.value != "success" for run in summary.runs
+    ):
+        raise typer.Exit(1)
+
+
+@app.command("web")
+def web(
+    dags_folder: str = DEFAULT_DAGS_FOLDER,
+    database_url: str = DEFAULT_DATABASE_URL,
+    log_root: str = DEFAULT_LOG_ROOT,
+    port: int = 8790,
+    parallelism: int | None = None,
+    no_scheduler: Annotated[bool, typer.Option("--no-scheduler")] = False,
+) -> None:
+    """启动本机管理界面和调度器。"""
+    from easyflow.web.app import serve
+
+    code = serve(
+        SimpleNamespace(
+            dags_folder=dags_folder,
+            database_url=database_url,
+            log_root=log_root,
+            port=port,
+            parallelism=parallelism,
+            no_scheduler=no_scheduler,
+        )
+    )
+    if code:
+        raise typer.Exit(code)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    if args.command == "db" and args.db_command == "init":
-        path = SQLiteStateStore(args.database_url).init_db()
-        print(f"Initialized easyflow SQLite database at {path}")
-        return 0
-    if args.command == "dags" and args.dags_command == "list":
-        try:
-            sources, issues = _resolve_dag_sources(
-                file_path=args.file,
-                dags_folder=args.dags_folder,
-                dag_id=args.dag_id,
-                require_sources=False,
-            )
-        except ValueError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-        _print_dag_parse_issues(issues)
-        if not sources:
-            print("No DAGs found.")
-            return 1 if issues else 0
-        for source in sources:
-            schedule = (
-                source.dag.schedule if source.dag.schedule is not None else "<manual>"
-            )
-            print(f"{source.dag_id}\t{source.file_path}\t{schedule}")
-        return 0
-    if args.command == "dags" and args.dags_command == "trigger":
-        logical_date = _parse_logical_date(args.logical_date)
-        conf = json.loads(args.conf_json)
-        try:
-            source, issues = _resolve_single_dag_source(
-                dag_id=args.dag_id,
-                file_path=args.file,
-                dags_folder=args.dags_folder,
-            )
-        except ValueError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-        _print_dag_parse_issues(issues)
-        dag = source.dag
-        store = SQLiteStateStore(args.database_url)
-        runner = PersistentDagRunner(store, log_root=args.log_root)
-        try:
-            run_id = runner.create_manual_run(
-                dag,
-                file_path=source.file_path,
-                logical_date=logical_date,
-                run_id=args.run_id,
-                conf=conf,
-            )
-        except DagRunCapacityError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-        result = runner.run_existing(
-            dag,
-            run_id=run_id,
-            file_path=source.file_path,
-            executor=args.executor,
-            parallelism=args.parallelism,
-        )
-        print(f"{result.dag_id} {result.run_id} {result.state.value}")
-        return 0 if result.state.value == "success" else 1
-    if args.command == "dags" and args.dags_command == "state":
-        record = SQLiteStateStore(args.database_url).get_dag_run(
-            args.dag_id, args.run_id
-        )
-        if record is None:
-            print("DagRun not found", file=sys.stderr)
-            return 1
-        print(record.state)
-        return 0
-    if args.command == "dags" and args.dags_command == "test":
-        print(
-            "easyflow dags test 需要 DAG 文件解析功能，将在后续里程碑实现。",
-            file=sys.stderr,
-        )
-        return 2
-    if args.command == "tasks" and args.tasks_command == "state":
-        state = SQLiteStateStore(args.database_url).get_task_state(
-            args.dag_id,
-            args.run_id,
-            args.task_id,
-        )
-        if state is None:
-            print("NULL")
-        else:
-            print(state.value)
-        return 0
-    if args.command == "tasks" and args.tasks_command == "logs":
-        store = SQLiteStateStore(args.database_url)
-        log_path = store.latest_task_log_path(args.dag_id, args.run_id, args.task_id)
-        if log_path is None:
-            print("Task log not found", file=sys.stderr)
-            return 1
-        path = Path(log_path)
-        if not path.exists():
-            print(f"Task log file not found: {path}", file=sys.stderr)
-            return 1
-        print(path.read_text(encoding="utf-8"), end="")
-        return 0
-    if args.command == "tasks" and args.tasks_command == "clear":
-        store = SQLiteStateStore(args.database_url)
-        preview = store.preview_clear_task_instances(
-            dag_id=args.dag_id,
-            run_id=args.run_id,
-            task_ids=args.task_id,
-        )
-        _print_clear_result(preview)
-        if args.dry_run:
-            return 0 if not preview.blocked else 1
-        if preview.blocked:
-            return 1
-        if not args.yes:
-            print("缺少 --yes，未执行 clear。", file=sys.stderr)
-            return 2
-        result = store.clear_task_instances(
-            dag_id=args.dag_id,
-            run_id=args.run_id,
-            task_ids=args.task_id,
-            actor="cli",
-            reason=args.reason,
-        )
-        _print_clear_result(result)
-        return 0 if not result.blocked else 1
-    if args.command == "scheduler":
-        try:
-            if args.once:
-                sources, parse_issues = _resolve_dag_sources(
-                    file_path=args.file,
-                    dags_folder=args.dags_folder,
-                    dag_id=args.dag_id,
-                    require_sources=True,
-                )
-                _print_dag_parse_issues(parse_issues)
-                summaries, scheduler_issues = run_scheduler_once_for_sources(
-                    sources=sources,
-                    store=SQLiteStateStore(args.database_url),
-                    now=_parse_logical_date(args.now) if args.now else None,
-                    log_root=args.log_root,
-                    owner=args.owner,
-                    lease_seconds=args.lease_seconds,
-                    executor=args.executor,
-                    parallelism=args.parallelism,
-                )
-            else:
-                if args.now:
-                    print(
-                        "scheduler 常驻模式不接受 --now；请使用 --once 测试指定时间。",
-                        file=sys.stderr,
-                    )
-                    return 2
-                if args.file and args.dag_id:
-                    summaries = run_scheduler_loop(
-                        dag_id=args.dag_id,
-                        file_path=args.file,
-                        store=SQLiteStateStore(args.database_url),
-                        log_root=args.log_root,
-                        owner=args.owner,
-                        lease_seconds=args.lease_seconds,
-                        interval_seconds=args.interval_seconds,
-                        max_loops=args.max_loops,
-                        executor=args.executor,
-                        parallelism=args.parallelism,
-                    )
-                    scheduler_issues = []
-                else:
-                    summaries, scheduler_issues = _run_scheduler_loop_for_sources(args)
-        except RuntimeError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-        except ValueError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-        _print_scheduler_issues(scheduler_issues)
-        if not summaries:
-            print("No scheduled runs created.")
-            return 1 if scheduler_issues else 0
-        for summary in summaries:
-            dag_id = summary.dag_id or args.dag_id or "<unknown>"
-            print(f"{dag_id} {summary.run_id} {summary.state.value}")
-        return (
-            0
-            if all(summary.state.value == "success" for summary in summaries)
-            and not scheduler_issues
-            else 1
-        )
-    if args.command == "backfill" and args.backfill_command == "create":
-        try:
-            source, issues = _resolve_single_dag_source(
-                dag_id=args.dag_id,
-                file_path=args.file,
-                dags_folder=args.dags_folder,
-            )
-        except ValueError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-        _print_dag_parse_issues(issues)
-        summary = create_backfill(
-            dag_id=args.dag_id,
-            file_path=source.file_path,
-            store=SQLiteStateStore(args.database_url),
-            start_date=_parse_date(args.start_date),
-            end_date=_parse_date(args.end_date),
-            reprocessing_behavior=args.reprocessing_behavior,
-            max_active_runs=args.max_active_runs,
-            backfill_id=args.backfill_id,
-            log_root=args.log_root,
-            executor=args.executor,
-            parallelism=args.parallelism,
-        )
-        print(f"backfill_id={summary.backfill_id}")
-        for run in summary.runs:
-            print(f"{args.dag_id} {run.run_id} {run.state.value}")
-        if not summary.complete:
-            print(
-                f"backfill 未完成，待处理区间数: {len(summary.pending)}；已有运行可由 scheduler 继续，"
-                "容量释放后请使用新的 backfill_id 重试剩余日期。",
-                file=sys.stderr,
-            )
-        return (
-            0
-            if summary.complete
-            and all(run.state.value == "success" for run in summary.runs)
-            else 1
-        )
-    parser.print_help()
-    return 1
+    try:
+        result = app(args=argv, prog_name="easyflow", standalone_mode=False)
+        return result if isinstance(result, int) else 0
+    except click.ClickException as exc:
+        exc.show()
+        return exc.exit_code
+    except click.exceptions.Exit as exc:
+        return exc.exit_code
 
 
 def _parse_logical_date(value: str | None) -> datetime:
@@ -468,39 +513,44 @@ def _resolve_dag_sources(
 
 
 def _run_scheduler_loop_for_sources(
-    args: argparse.Namespace,
+    args: SimpleNamespace,
 ) -> tuple[list[ScheduledRunSummary], list[SchedulerIssue]]:
     store = SQLiteStateStore(args.database_url)
     all_summaries: list[ScheduledRunSummary] = []
     all_issues: list[SchedulerIssue] = []
     loops = 0
-    with scheduler_session(
-        store=store, owner=args.owner, lease_seconds=args.lease_seconds
-    ) as heartbeat:
-        while True:
-            sources, parse_issues = _resolve_dag_sources(
-                file_path=args.file,
-                dags_folder=args.dags_folder,
-                dag_id=args.dag_id,
-                require_sources=False,
-            )
-            _print_dag_parse_issues(parse_issues)
-            summaries, scheduler_issues = _run_sources_with_lease(
-                sources=sources,
-                store=store,
-                now=datetime.now(timezone.utc),
-                log_root=args.log_root,
-                executor=args.executor,
-                parallelism=args.parallelism,
-                heartbeat=heartbeat,
-            )
-            all_summaries.extend(summaries)
-            all_issues.extend(scheduler_issues)
-            loops += 1
-            if args.max_loops is not None and loops >= args.max_loops:
-                return all_summaries, all_issues
-            if heartbeat.lost.wait(args.interval_seconds):
-                raise RuntimeError("scheduler lease 已丢失，停止调度。")
+    last_issues: tuple[str, ...] = ()
+    with (
+        closing(AsyncDagDiscovery(args.dags_folder, file_path=args.file)) as discovery,
+        scheduler_session(
+            store=store, owner=args.owner, lease_seconds=args.lease_seconds
+        ) as heartbeat,
+    ):
+        with SchedulerCoordinator(
+            store, heartbeat, args.log_root, args.executor, args.parallelism
+        ) as coordinator:
+            while True:
+                summaries, scheduler_issues = coordinator.collect()
+                if args.max_loops is not None:
+                    all_summaries.extend(summaries)
+                    all_issues.extend(scheduler_issues)
+                else:
+                    _print_scheduler_issues(scheduler_issues)
+                result = discovery.scan(dag_id=args.dag_id, wait_seconds=0.2)
+                issue_messages = tuple(
+                    f"{item.file_path}:{item.dag_id}:{item.message}"
+                    for item in result.issues
+                )
+                if issue_messages != last_issues:
+                    _print_dag_parse_issues(result.issues)
+                    last_issues = issue_messages
+                coordinator.submit(result.sources, datetime.now(timezone.utc))
+                loops += 1
+                if args.max_loops is not None and loops >= args.max_loops:
+                    summaries, scheduler_issues = coordinator.collect(wait=True)
+                    return all_summaries + summaries, all_issues + scheduler_issues
+                if heartbeat.lost.wait(args.interval_seconds):
+                    raise RuntimeError("scheduler lease 已丢失，停止调度。")
 
 
 def _print_dag_parse_issues(issues: list[DagParseIssue]) -> None:

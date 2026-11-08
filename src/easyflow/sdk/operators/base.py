@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 from collections.abc import Iterable
 from datetime import timedelta
+from functools import wraps
 from typing import Any, ClassVar
 
 from easyflow.sdk._compat import OPERATOR_UNSUPPORTED_KWARGS, reject_kwargs
@@ -22,9 +24,25 @@ def _is_many(value: Any) -> bool:
     return isinstance(value, Iterable) and not isinstance(value, (str, bytes, dict))
 
 
+def _apply_dag_defaults(func: Any) -> Any:
+    @wraps(func)
+    def wrapped(self: Any, **kwargs: Any) -> None:
+        from easyflow.sdk.dag import current_dag
+
+        dag = kwargs.get("dag") or current_dag()
+        if dag is not None:
+            for key, value in dag.default_args.items():
+                if key not in kwargs:
+                    kwargs[key] = copy.deepcopy(value)
+        func(self, **kwargs)
+
+    return wrapped
+
+
 class BaseOperator:
     template_fields: ClassVar[tuple[str, ...]] = ()
 
+    @_apply_dag_defaults
     def __init__(
         self,
         *,
@@ -75,6 +93,19 @@ class BaseOperator:
     @property
     def dag_id(self) -> str | None:
         return None if self._dag is None else self._dag.dag_id
+
+    @property
+    def output(self) -> Any:
+        from easyflow.sdk.xcom import XComArg
+
+        return XComArg(self)
+
+    def set_xcom_dependencies(self) -> None:
+        from easyflow.sdk.xcom import iter_xcom_args
+
+        for name in self.template_fields:
+            for value in iter_xcom_args(getattr(self, name, None)):
+                value.operator.set_downstream(self)
 
     def execute(self, context: dict[str, Any]) -> Any:
         raise NotImplementedError

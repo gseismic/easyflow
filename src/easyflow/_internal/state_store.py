@@ -33,6 +33,14 @@ class SchedulerLeaseLost(RuntimeError):
     pass
 
 
+class TaskCapacityFull(RuntimeError):
+    pass
+
+
+class DagPaused(RuntimeError):
+    pass
+
+
 class BackfillRunNotEligible(StateConflictError):
     pass
 
@@ -53,6 +61,16 @@ CREATE TABLE IF NOT EXISTS dag_definition (
     definition_hash TEXT NOT NULL,
     file_path TEXT,
     parsed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS runtime_config (
+    key TEXT PRIMARY KEY,
+    value INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dag_control (
+    dag_id TEXT PRIMARY KEY,
+    is_paused INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS dag_run (
@@ -181,6 +199,13 @@ def path_from_database_url(database_url: str) -> Path:
     return Path(database_url)
 
 
+def _is_dag_paused(connection: sqlite3.Connection, dag_id: str) -> bool:
+    row = connection.execute(
+        "SELECT is_paused FROM dag_control WHERE dag_id = ?", (dag_id,)
+    ).fetchone()
+    return bool(row and row[0])
+
+
 class SQLiteStateStore:
     def __init__(self, database_url: str = "sqlite:///./.easyflow/easyflow.db") -> None:
         self.database_url = database_url
@@ -223,6 +248,41 @@ class SQLiteStateStore:
             ).fetchall()
         return [row[0] for row in rows]
 
+    def configure_parallelism(self, value: int, *, override: bool = False) -> int:
+        if value < 1:
+            raise ValueError("parallelism 必须大于 0。")
+        self.init_db()
+        with self._connect() as connection:
+            if override:
+                connection.execute(
+                    "INSERT INTO runtime_config(key, value) VALUES ('parallelism', ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (value,),
+                )
+            else:
+                connection.execute(
+                    "INSERT OR IGNORE INTO runtime_config(key, value) VALUES ('parallelism', ?)",
+                    (value,),
+                )
+            row = connection.execute(
+                "SELECT value FROM runtime_config WHERE key = 'parallelism'"
+            ).fetchone()
+        return int(row[0])
+
+    def set_dag_paused(self, dag_id: str, paused: bool) -> None:
+        self.init_db()
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO dag_control(dag_id, is_paused) VALUES (?, ?) "
+                "ON CONFLICT(dag_id) DO UPDATE SET is_paused = excluded.is_paused",
+                (dag_id, int(paused)),
+            )
+
+    def is_dag_paused(self, dag_id: str) -> bool:
+        self.init_db()
+        with self._connect() as connection:
+            return _is_dag_paused(connection, dag_id)
+
     def create_dag_run(
         self,
         *,
@@ -246,6 +306,8 @@ class SQLiteStateStore:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             _assert_scheduler_lease(connection, scheduler_fence)
+            if run_type == "scheduled" and _is_dag_paused(connection, dag.dag_id):
+                raise DagPaused(f"DAG {dag.dag_id!r} 已暂停。")
             if run_type == "scheduled":
                 query = (
                     "SELECT 1 FROM dag_run WHERE dag_id = ? AND run_type = 'scheduled'"
@@ -275,15 +337,17 @@ class SQLiteStateStore:
                     raise BackfillRunNotEligible(
                         f"backfill 区间已有运行: {dag.dag_id}/{logical_date}"
                     )
-            limit = dag.max_active_runs or 1
-            active = connection.execute(
-                "SELECT COUNT(*) FROM dag_run WHERE dag_id = ? AND state IN ('queued', 'running')",
-                (dag.dag_id,),
-            ).fetchone()[0]
-            if active >= limit:
-                raise DagRunCapacityError(
-                    f"DAG {dag.dag_id!r} 已达到 max_active_runs={limit}。"
-                )
+            if run_type != "backfill":
+                limit = dag.max_active_runs or 1
+                active = connection.execute(
+                    "SELECT COUNT(*) FROM dag_run WHERE dag_id = ? AND run_type != 'backfill' "
+                    "AND state IN ('queued', 'running')",
+                    (dag.dag_id,),
+                ).fetchone()[0]
+                if active >= limit:
+                    raise DagRunCapacityError(
+                        f"DAG {dag.dag_id!r} 已达到 max_active_runs={limit}。"
+                    )
             if run_type == "backfill" and max_active_runs is not None:
                 backfill_active = connection.execute(
                     "SELECT COUNT(*) FROM dag_run WHERE dag_id = ? AND backfill_id = ? "
@@ -388,6 +452,16 @@ class SQLiteStateStore:
         with self._connect() as connection:
             row = connection.execute(query, params).fetchone()
         return row is not None
+
+    def latest_automated_logical_date(self, dag_id: str) -> datetime | None:
+        self.init_db()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT MAX(logical_date) FROM dag_run WHERE dag_id = ? "
+                "AND run_type IN ('scheduled', 'backfill')",
+                (dag_id,),
+            ).fetchone()
+        return None if row is None or row[0] is None else datetime.fromisoformat(row[0])
 
     def latest_dag_run_state_for_logical_date(
         self,
@@ -609,6 +683,8 @@ class SQLiteStateStore:
                 now_iso = _iso(current)
                 lease_until = _iso(current + timedelta(seconds=lease_seconds))
             _assert_scheduler_lease(connection, scheduler_fence)
+            if _is_dag_paused(connection, dag_id):
+                raise DagPaused(f"DAG {dag_id!r} 已暂停。")
             dag_run = connection.execute(
                 "SELECT state FROM dag_run WHERE dag_id = ? AND run_id = ?",
                 (dag_id, run_id),
@@ -645,6 +721,16 @@ class SQLiteStateStore:
                 raise StateConflictError(
                     f"TaskInstance {task_id} 当前状态 {state!r} 不能开始新 try。"
                 )
+            capacity = connection.execute(
+                "SELECT value FROM runtime_config WHERE key = 'parallelism'"
+            ).fetchone()
+            running = connection.execute(
+                "SELECT COUNT(*) FROM task_instance WHERE state = 'running' "
+                "AND (lease_expires_at IS NULL OR lease_expires_at > ?)",
+                (now_iso,),
+            ).fetchone()[0]
+            if running >= (capacity[0] if capacity else 1):
+                raise TaskCapacityFull("实例任务并发已达到上限。")
             next_try = int(try_number) + 1
             updated = connection.execute(
                 """
@@ -792,7 +878,7 @@ class SQLiteStateStore:
                 (log_path, dag_id, run_id, task_id, try_number),
             )
 
-    def commit_success(
+    def commit_task_terminal(
         self,
         *,
         dag_id: str,
@@ -800,7 +886,10 @@ class SQLiteStateStore:
         task_id: str,
         try_number: int,
         xcom_values: dict[str, Any],
+        state: TaskInstanceState = TaskInstanceState.SUCCESS,
     ) -> None:
+        if state not in {TaskInstanceState.SUCCESS, TaskInstanceState.SKIPPED}:
+            raise ValueError("任务终态提交只支持 success 或 skipped。")
         self.init_db()
         now = _utc_now()
         encoded_xcom = {
@@ -821,7 +910,7 @@ class SQLiteStateStore:
                   AND state = ? AND try_number = ?
                 """,
                 (
-                    TaskInstanceState.SUCCESS.value,
+                    state.value,
                     now,
                     dag_id,
                     run_id,
@@ -831,7 +920,9 @@ class SQLiteStateStore:
                 ),
             ).rowcount
             if updated != 1:
-                raise StateConflictError(f"TaskInstance {task_id} success 提交冲突。")
+                raise StateConflictError(
+                    f"TaskInstance {task_id} {state.value} 提交冲突。"
+                )
             connection.execute(
                 """
                 UPDATE task_try
@@ -840,7 +931,7 @@ class SQLiteStateStore:
                   AND map_index = -1 AND try_number = ?
                 """,
                 (
-                    TaskInstanceState.SUCCESS.value,
+                    state.value,
                     now,
                     dag_id,
                     run_id,

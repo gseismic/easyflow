@@ -20,6 +20,11 @@ class PythonOperator(BaseOperator):
         self.python_callable = python_callable
         self.op_args = list(op_args or [])
         self.op_kwargs = dict(op_kwargs or {})
+        self.set_xcom_dependencies()
 
     def execute(self, context: dict[str, Any]) -> Any:
-        return self.python_callable(*self.op_args, **self.op_kwargs)
+        from easyflow.sdk.context import call_with_context
+
+        return call_with_context(
+            self.python_callable, self.op_args, self.op_kwargs, context
+        )
