@@ -6,7 +6,6 @@ import json
 import os
 import subprocess
 import sys
-import sysconfig
 import tempfile
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -18,6 +17,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from easyflow._internal.schedules import validate_schedule
+from easyflow._internal.source_imports import LocalSourceFinder, local_source_imports
 from easyflow.sdk.dag import DAG, collect_registered_dags
 from easyflow.sdk.operators.base import BaseOperator
 
@@ -226,10 +226,11 @@ def inspect_dags_from_file(
 def _inspect_dags_in_process(file_path: str | Path) -> DagDiscoveryResult:
     path = Path(file_path).resolve()
     try:
-        module = _load_module(path)
+        with local_source_imports(path):
+            module = _load_module(path)
+            sources, issues = _sources_from_module(module, path)
     except Exception as exc:
         return DagDiscoveryResult([], [DagParseIssue(path, None, str(exc))])
-    sources, issues = _sources_from_module(module, path)
     sources, duplicate_issues = _remove_duplicate_dag_ids(sources)
     issues.extend(duplicate_issues)
     return DagDiscoveryResult(sources, issues)
@@ -348,11 +349,13 @@ def _sources_from_module(
         try:
             dag.validate()
             validate_schedule(dag.schedule)
+            dag._easyflow_source_sha256 = module.__easyflow_source_sha256__
+            dag._easyflow_dependency_hashes = _local_dependency_hashes(
+                module, path, dag
+            )
         except Exception as exc:  # noqa: BLE001 - 单个 DAG 无效不应阻塞同文件其他 DAG。
             issues.append(DagParseIssue(path, dag.dag_id, str(exc)))
             continue
-        dag._easyflow_source_sha256 = module.__easyflow_source_sha256__
-        dag._easyflow_dependency_hashes = _local_dependency_hashes(module, path, dag)
         sources.append(DagSource(dag_id=dag.dag_id, file_path=path, dag=dag))
     return sources, issues
 
@@ -489,13 +492,7 @@ def _file_hash(path: Path) -> str:
 def _local_dependency_hashes(
     module: ModuleType, dag_path: Path, dag: DAG
 ) -> dict[str, str]:
-    roots = {dag_path.parent.resolve(), Path.cwd().resolve()}
-    for parent in dag_path.parents:
-        if (parent / "pyproject.toml").is_file() or (parent / ".git").exists():
-            roots.add(parent.resolve())
-            break
-    library_root = Path(__file__).resolve().parents[1]
-    stdlib_root = Path(sysconfig.get_path("stdlib")).resolve()
+    finder = LocalSourceFinder(dag_path)
     pending: list[ModuleType] = [module]
     seen: set[str] = set()
     files: dict[str, str] = {}
@@ -511,16 +508,13 @@ def _local_dependency_hashes(
         if not isinstance(filename, (str, os.PathLike)):
             return
         path = Path(filename).resolve()
-        if (
-            path.suffix != ".py"
-            or path == dag_path
-            or path.is_relative_to(library_root)
-            or path.is_relative_to(stdlib_root)
-            or not any(path.is_relative_to(root) for root in roots)
-        ):
+        if path == dag_path or not finder.is_local(path):
             return
         if str(path) not in files:
-            files[str(path)] = _file_hash(path)
+            digest = getattr(candidate, "__easyflow_source_sha256__", None)
+            if digest is None:
+                raise ValueError(f"无法确认本地依赖实际加载的源码：{path}")
+            files[str(path)] = digest
             pending.append(candidate)
 
     for task in dag.tasks:

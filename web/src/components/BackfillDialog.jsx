@@ -4,6 +4,7 @@ import Modal from "./Modal";
 import { formatTime } from "./Status";
 
 export default function BackfillDialog({ base, onClose }) {
+  const [precise, setPrecise] = useState(false);
   const [dates, setDates] = useState({
     start_date: "",
     end_date: "",
@@ -21,7 +22,14 @@ export default function BackfillDialog({ base, onClose }) {
     setBusy(true);
     setError("");
     try {
-      setPreview(await post(`${base}/backfill-preview`, dates));
+      const payload = precise
+        ? {
+            ...dates,
+            start_date: new Date(dates.start_date).toISOString(),
+            end_date: new Date(dates.end_date).toISOString(),
+          }
+        : dates;
+      setPreview(await post(`${base}/backfill-preview`, payload));
     } catch (reason) {
       setError(reason.message);
     } finally {
@@ -31,21 +39,46 @@ export default function BackfillDialog({ base, onClose }) {
   return (
     <Modal title="回补日期预览" onClose={onClose}>
       <form onSubmit={submit}>
-        <p>检查指定日期范围；实际创建时会重新检查已有运行状态。</p>
+        <p>检查指定范围；实际创建时会重新检查已有运行状态。</p>
+        <label className="field">
+          范围精度
+          <select
+            value={precise ? "time" : "date"}
+            disabled={busy}
+            onChange={(event) => {
+              setPrecise(event.target.value === "time");
+              setDates({ ...dates, start_date: "", end_date: "" });
+              setPreview(null);
+              setError("");
+            }}
+          >
+            <option value="date">整日范围</option>
+            <option value="time">精确时间（适合高频任务）</option>
+          </select>
+        </label>
+        <p className="hint">
+          {precise
+            ? "时间按浏览器本地时区输入，包含开始和结束时刻；每次最多预览 1000 个区间。"
+            : "日期按工作流时区覆盖整日；每次最多预览 1000 个区间，高频任务可切换精确时间。"}
+        </p>
         <div className="form-row">
           <label className="field">
-            开始日期
+            {precise ? "开始时间" : "开始日期"}
             <input
-              type="date"
+              type={precise ? "datetime-local" : "date"}
+              step={precise ? "any" : undefined}
+              disabled={busy}
               required
               value={dates.start_date}
               onChange={(event) => change("start_date", event.target.value)}
             />
           </label>
           <label className="field">
-            结束日期
+            {precise ? "结束时间" : "结束日期"}
             <input
-              type="date"
+              type={precise ? "datetime-local" : "date"}
+              step={precise ? "any" : undefined}
+              disabled={busy}
               required
               value={dates.end_date}
               onChange={(event) => change("end_date", event.target.value)}
@@ -56,6 +89,7 @@ export default function BackfillDialog({ base, onClose }) {
           已有运行时
           <select
             value={dates.reprocessing_behavior}
+            disabled={busy}
             onChange={(event) =>
               change("reprocessing_behavior", event.target.value)
             }
@@ -68,7 +102,7 @@ export default function BackfillDialog({ base, onClose }) {
         {preview && (
           <div className="preview-box">
             <strong>
-              共 {preview.length} 个日期，当前可创建{" "}
+              共 {preview.length} 个区间，当前可创建{" "}
               {preview.filter((item) => item.eligible).length} 个
             </strong>
             <div className="preview-dates">

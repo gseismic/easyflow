@@ -139,8 +139,13 @@ class LocalExecutor:
                     time.sleep(0.05)
                     continue
                 return task_states
+            existing_running = {
+                task_id
+                for task_id, state in task_states.items()
+                if state == TaskInstanceState.RUNNING
+            }
             for task in ordered_tasks:
-                if len(active) >= max_active:
+                if len(set(active) | existing_running) >= max_active:
                     break
                 if task.task_id in active:
                     continue

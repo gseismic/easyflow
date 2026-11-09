@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from easyflow._internal.scheduler import preview_backfill
+from easyflow._internal.schedules import parse_backfill_boundary
 from easyflow._internal.state_store import DagRunCapacityError
 
 router = APIRouter(prefix="/api/dags")
@@ -20,9 +21,16 @@ class TriggerRequest(BaseModel):
 
 
 class BackfillRequest(BaseModel):
-    start_date: date
-    end_date: date
+    start_date: date | datetime
+    end_date: date | datetime
     reprocessing_behavior: str = "none"
+
+    @field_validator("start_date", "end_date", mode="before")
+    @classmethod
+    def parse_boundary(cls, value):
+        if isinstance(value, str):
+            return parse_backfill_boundary(value)
+        return value
 
 
 @router.get("")

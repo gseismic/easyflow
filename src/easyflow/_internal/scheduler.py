@@ -66,7 +66,11 @@ MAX_BACKFILL_PREVIEW_INTERVALS = 1000
 
 
 def _backfill_intervals(
-    dag: object, start_date: date, end_date: date, *, max_intervals: int | None = None
+    dag: object,
+    start_date: date | datetime,
+    end_date: date | datetime,
+    *,
+    max_intervals: int | None = None,
 ) -> list:
     intervals = backfill_intervals(
         dag.schedule,
@@ -96,8 +100,8 @@ def preview_backfill(
     *,
     dag: object,
     store: SQLiteStateStore,
-    start_date: date,
-    end_date: date,
+    start_date: date | datetime,
+    end_date: date | datetime,
     reprocessing_behavior: str = "none",
 ) -> list[BackfillPreview]:
     if reprocessing_behavior not in {"none", "failed", "completed"}:
@@ -454,8 +458,8 @@ def create_backfill(
     dag_id: str,
     file_path: str | Path,
     store: SQLiteStateStore,
-    start_date: date,
-    end_date: date,
+    start_date: date | datetime,
+    end_date: date | datetime,
     reprocessing_behavior: str = "none",
     max_active_runs: int | None = None,
     backfill_id: str | None = None,

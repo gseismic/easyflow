@@ -111,3 +111,18 @@ def test_web_backfill_preview_rejects_oversized_range(tmp_path):
     )
     assert response.status_code == 400
     assert "最多支持 1000 个区间" in response.json()["detail"]
+    response = client.post(
+        "/api/dags/minute/backfill-preview",
+        json={
+            "start_date": "2026-07-01T00:00:00+08:00",
+            "end_date": "2026-07-01T00:09:00+08:00",
+        },
+    )
+    assert response.status_code == 200
+    assert len(response.json()) == 10
+    assert response.json()[0]["logical_date"] == "2026-06-30T16:00:00+00:00"
+    response = client.post(
+        "/api/dags/minute/backfill-preview",
+        json={"start_date": "2026-07-01T00:00:00", "end_date": "2026-07-01"},
+    )
+    assert response.status_code == 422

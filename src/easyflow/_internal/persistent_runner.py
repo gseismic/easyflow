@@ -540,6 +540,7 @@ class PersistentDagRunner:
                     owner=self.runner_id,
                     lease_seconds=self.task_lease_seconds,
                     scheduler_fence=self.scheduler_fence,
+                    max_active_tasks=dag.max_active_tasks,
                 )
             except TaskCapacityFull:
                 time.sleep(0.05)

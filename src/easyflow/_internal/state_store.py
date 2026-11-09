@@ -739,7 +739,10 @@ class SQLiteStateStore:
         lease_seconds: int = 30,
         now: datetime | None = None,
         scheduler_fence: SchedulerFence | None = None,
+        max_active_tasks: int | None = None,
     ) -> int | None:
+        if max_active_tasks is not None and max_active_tasks < 1:
+            raise ValueError("max_active_tasks 必须大于 0。")
         self.init_db()
         current = now or datetime.now(timezone.utc)
         if current.tzinfo is None:
@@ -802,6 +805,17 @@ class SQLiteStateStore:
             ).fetchone()[0]
             if running >= (capacity[0] if capacity else 1):
                 raise TaskCapacityFull("实例任务并发已达到上限。")
+            if max_active_tasks is not None:
+                run_running = connection.execute(
+                    "SELECT COUNT(*) FROM task_instance WHERE dag_id = ? AND run_id = ? "
+                    "AND state = 'running' "
+                    "AND (lease_expires_at IS NULL OR lease_expires_at > ?)",
+                    (dag_id, run_id, now_iso),
+                ).fetchone()[0]
+                if run_running >= max_active_tasks:
+                    raise TaskCapacityFull(
+                        "当前运行的任务并发已达到 max_active_tasks 上限。"
+                    )
             next_try = int(try_number) + 1
             updated = connection.execute(
                 """

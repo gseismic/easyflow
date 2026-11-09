@@ -135,8 +135,8 @@ def scheduler_intervals(
 
 def backfill_intervals(
     schedule: str | timedelta | None,
-    start_date: date,
-    end_date: date,
+    start_date: date | datetime,
+    end_date: date | datetime,
     tz: tzinfo = timezone.utc,
     *,
     anchor: datetime | None = None,
@@ -144,24 +144,25 @@ def backfill_intervals(
 ) -> list[DataInterval]:
     if schedule is None:
         raise ValueError("无 schedule 的 DAG 不支持 backfill。")
-    if end_date < start_date:
+    start = _backfill_boundary(start_date, tz, end=False)
+    end = _backfill_boundary(end_date, tz, end=True)
+    if _utc(end) < _utc(start):
         raise ValueError("end-date 必须大于等于 start-date。")
     if max_intervals is not None and max_intervals < 1:
         raise ValueError("max_intervals 必须大于 0。")
-    start = datetime.combine(start_date, time.min, tzinfo=tz)
     if schedule == "@once":
         logical = anchor.astimezone(tz) if anchor is not None else start
         return (
             [interval_for_logical_date(schedule, logical)]
-            if start_date <= logical.date() <= end_date
+            if _utc(start) <= _utc(logical) <= _utc(end)
             else []
         )
     current = _ceil_logical_date(schedule, start, anchor=anchor or start)
     intervals = []
-    while current.date() <= end_date:
+    while _utc(current) <= _utc(end):
         if max_intervals is not None and len(intervals) >= max_intervals:
             raise ValueError(
-                f"回补预览最多支持 {max_intervals} 个区间；请缩小或分段预览日期范围。"
+                f"回补预览最多支持 {max_intervals} 个区间；请缩小范围或使用带时区的精确时间分段预览。"
             )
         intervals.append(interval_for_logical_date(schedule, current))
         next_value = next_logical_date(schedule, current)
@@ -169,6 +170,24 @@ def backfill_intervals(
             raise ValueError("schedule 产生了非递增区间。")
         current = next_value
     return intervals
+
+
+def parse_backfill_boundary(value: str) -> date | datetime:
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("回补精确时间必须带时区。")
+        return parsed
+
+
+def _backfill_boundary(value: date | datetime, tz: tzinfo, *, end: bool) -> datetime:
+    if isinstance(value, datetime):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("回补精确时间必须带时区。")
+        return value.astimezone(tz)
+    return datetime.combine(value, time.max if end else time.min, tzinfo=tz)
 
 
 def interval_for_logical_date(

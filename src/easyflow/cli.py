@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from contextlib import closing
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated
@@ -31,6 +31,7 @@ from easyflow._internal.scheduler import (
     scheduler_session,
 )
 from easyflow._internal.state_store import DagRunCapacityError, SQLiteStateStore
+from easyflow._internal.schedules import parse_backfill_boundary
 
 DEFAULT_DATABASE_URL = "sqlite:///./.easyflow/easyflow.db"
 DEFAULT_LOG_ROOT = "./.easyflow/logs"
@@ -411,8 +412,16 @@ def scheduler(
 @backfill_app.command("create")
 def backfill_create(
     dag_id: Annotated[str, typer.Option("--dag-id")],
-    start_date: Annotated[str, typer.Option("--start-date")],
-    end_date: Annotated[str, typer.Option("--end-date")],
+    start_date: Annotated[
+        str,
+        typer.Option("--start-date", help="开始日期或带时区的 ISO 时间，包含端点。"),
+    ],
+    end_date: Annotated[
+        str,
+        typer.Option(
+            "--end-date", help="结束日期（含整日）或带时区的 ISO 时间，包含端点。"
+        ),
+    ],
     file: str | None = None,
     dags_folder: str = DEFAULT_DAGS_FOLDER,
     reprocessing_behavior: str = "none",
@@ -428,7 +437,10 @@ def backfill_create(
     source = _source(dag_id, file, dags_folder)
     store = SQLiteStateStore(database_url)
     try:
-        start, end = _parse_date(start_date), _parse_date(end_date)
+        start, end = (
+            parse_backfill_boundary(start_date),
+            parse_backfill_boundary(end_date),
+        )
         if dry_run:
             preview = preview_backfill(
                 dag=source.dag,
@@ -518,10 +530,6 @@ def _parse_logical_date(value: str | None) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError("--logical-date 必须带时区。")
     return parsed
-
-
-def _parse_date(value: str) -> date:
-    return date.fromisoformat(value)
 
 
 def _resolve_single_dag_source(
