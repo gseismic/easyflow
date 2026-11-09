@@ -29,3 +29,7 @@
 - 2026-11-10 01:28 Asia/Shanghai：[核心 Review 问题修复结果](PLAN-20261110-001-model-unknown-review-core-fixes-OUTCOME.md)，五项缺陷已修复；163 项测试与针对性静态检查通过。
 - 2026-11-10 02:45 Asia/Shanghai：[第二轮 Review 边界问题修复计划](PLAN-20261110-002-model-unknown-review-boundary-fixes.md)，进行中；覆盖本地依赖源码、恢复运行并发和高频回补时间范围三项缺陷。
 - 2026-11-10 02:56 Asia/Shanghai：[第二轮 Review 边界问题修复结果](PLAN-20261110-002-model-unknown-review-boundary-fixes-OUTCOME.md)，三项均已完成；172 项 Python 测试、4 项前端测试、构建、核心静态检查及上海时区浏览器验证通过，改动尚未提交。
+- 2026-11-10 03:57 Asia/Shanghai：[easyflow 使用教程计划](PLAN-20261110-003-model-unknown-usage-tutorial.md)，进行中。
+- 2026-11-10 04:04 Asia/Shanghai：[easyflow 使用教程结果](PLAN-20261110-003-model-unknown-usage-tutorial-OUTCOME.md)，独立教程已完成，安装、示例、CLI 和 Web 验证通过。
+- 2026-11-10 04:30 Asia/Shanghai：[合并 easyflow 使用教程与 Skill 计划](PLAN-20261110-004-model-unknown-consolidate-usage-skill.md)，进行中。
+- 2026-11-10 04:36 Asia/Shanghai：[合并 easyflow 使用教程与 Skill 结果](PLAN-20261110-004-model-unknown-consolidate-usage-skill-OUTCOME.md)，教程已迁移并去重；Skill、示例及独立调度器验证通过。
