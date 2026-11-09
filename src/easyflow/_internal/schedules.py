@@ -140,11 +140,14 @@ def backfill_intervals(
     tz: tzinfo = timezone.utc,
     *,
     anchor: datetime | None = None,
+    max_intervals: int | None = None,
 ) -> list[DataInterval]:
     if schedule is None:
         raise ValueError("无 schedule 的 DAG 不支持 backfill。")
     if end_date < start_date:
         raise ValueError("end-date 必须大于等于 start-date。")
+    if max_intervals is not None and max_intervals < 1:
+        raise ValueError("max_intervals 必须大于 0。")
     start = datetime.combine(start_date, time.min, tzinfo=tz)
     if schedule == "@once":
         logical = anchor.astimezone(tz) if anchor is not None else start
@@ -156,6 +159,10 @@ def backfill_intervals(
     current = _ceil_logical_date(schedule, start, anchor=anchor or start)
     intervals = []
     while current.date() <= end_date:
+        if max_intervals is not None and len(intervals) >= max_intervals:
+            raise ValueError(
+                f"回补预览最多支持 {max_intervals} 个区间；请缩小或分段预览日期范围。"
+            )
         intervals.append(interval_for_logical_date(schedule, current))
         next_value = next_logical_date(schedule, current)
         if _utc(next_value) <= _utc(current):

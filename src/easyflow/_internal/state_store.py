@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS dag_run (
     state TEXT NOT NULL,
     definition_hash TEXT,
     backfill_id TEXT,
+    backfill_max_active_runs INTEGER,
     queued_at TEXT NOT NULL,
     start_date TEXT,
     end_date TEXT,
@@ -106,6 +107,14 @@ ON dag_run(dag_id, queued_at DESC);
 
 CREATE INDEX IF NOT EXISTS ix_dag_run_dag_state
 ON dag_run(dag_id, state);
+
+CREATE INDEX IF NOT EXISTS ix_dag_run_dag_logical_date
+ON dag_run(dag_id, logical_date);
+
+CREATE TABLE IF NOT EXISTS schedule_cursor (
+    dag_id TEXT PRIMARY KEY,
+    logical_date TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS task_instance (
     dag_id TEXT NOT NULL,
@@ -232,6 +241,10 @@ class SQLiteStateStore:
                 connection.execute(
                     "ALTER TABLE dag_run ADD COLUMN logical_timezone TEXT"
                 )
+            if "backfill_max_active_runs" not in columns:
+                connection.execute(
+                    "ALTER TABLE dag_run ADD COLUMN backfill_max_active_runs INTEGER"
+                )
             columns = {
                 row[1]
                 for row in connection.execute("PRAGMA table_info(dag_definition)")
@@ -318,12 +331,18 @@ class SQLiteStateStore:
             if run_type == "scheduled" and _is_dag_paused(connection, dag.dag_id):
                 raise DagPaused(f"DAG {dag.dag_id!r} 已暂停。")
             if run_type == "scheduled":
-                query = (
-                    "SELECT 1 FROM dag_run WHERE dag_id = ? AND run_type = 'scheduled'"
-                )
+                query = "SELECT 1 FROM dag_run WHERE dag_id = ? "
                 params: list[Any] = [dag.dag_id]
-                if not only_once:
-                    query += " AND logical_date = ?"
+                if only_once:
+                    query += (
+                        "AND (run_type = 'scheduled' OR "
+                        "(run_type = 'backfill' AND logical_date <= ?))"
+                    )
+                    params.append(_iso(logical_date))
+                else:
+                    query += (
+                        "AND run_type IN ('scheduled', 'backfill') AND logical_date = ?"
+                    )
                     params.append(_iso(logical_date))
                 if connection.execute(query + " LIMIT 1", params).fetchone():
                     raise ScheduledRunExists(
@@ -384,9 +403,9 @@ class SQLiteStateStore:
                 INSERT INTO dag_run(
                     dag_id, run_id, run_type, logical_date, data_interval_start,
                     data_interval_end, state, definition_hash, backfill_id, queued_at,
-                    conf_json, logical_timezone
+                    conf_json, logical_timezone, backfill_max_active_runs
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     dag.dag_id,
@@ -401,6 +420,9 @@ class SQLiteStateStore:
                     now,
                     json.dumps(conf or {}, ensure_ascii=False),
                     _timezone_id(logical_date),
+                    (max_active_runs if max_active_runs is not None else -1)
+                    if run_type == "backfill"
+                    else None,
                 ),
             )
             for task in dag.tasks:
@@ -466,11 +488,51 @@ class SQLiteStateStore:
         self.init_db()
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT MAX(logical_date) FROM dag_run WHERE dag_id = ? "
-                "AND run_type IN ('scheduled', 'backfill')",
-                (dag_id,),
+                "SELECT MAX(logical_date) FROM ("
+                "SELECT MAX(logical_date) AS logical_date FROM dag_run "
+                "WHERE dag_id = ? AND run_type = 'scheduled' "
+                "UNION ALL SELECT logical_date FROM schedule_cursor WHERE dag_id = ?)",
+                (dag_id, dag_id),
             ).fetchone()
         return None if row is None or row[0] is None else datetime.fromisoformat(row[0])
+
+    def advance_schedule_cursor(self, dag_id: str, logical_date: datetime) -> None:
+        self.init_db()
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO schedule_cursor(dag_id, logical_date) VALUES (?, ?) "
+                "ON CONFLICT(dag_id) DO UPDATE SET "
+                "logical_date = MAX(logical_date, excluded.logical_date)",
+                (dag_id, _iso(logical_date)),
+            )
+
+    def backfilled_logical_dates(
+        self, dag_id: str, start: datetime, end: datetime
+    ) -> set[str]:
+        self.init_db()
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT DISTINCT logical_date FROM dag_run WHERE dag_id = ? "
+                "AND run_type = 'backfill' AND logical_date BETWEEN ? AND ?",
+                (dag_id, _iso(start), _iso(end)),
+            ).fetchall()
+        return {row[0] for row in rows}
+
+    def latest_dag_run_states_for_range(
+        self, *, dag_id: str, start: datetime, end: datetime
+    ) -> dict[str, DagRunState]:
+        self.init_db()
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT logical_date, state FROM dag_run WHERE dag_id = ? "
+                "AND logical_date BETWEEN ? AND ? "
+                "ORDER BY queued_at DESC, rowid DESC",
+                (dag_id, _iso(start), _iso(end)),
+            ).fetchall()
+        latest: dict[str, DagRunState] = {}
+        for logical_date, state in rows:
+            latest.setdefault(logical_date, DagRunState(state))
+        return latest
 
     def latest_dag_run_state_for_logical_date(
         self,
@@ -1215,7 +1277,13 @@ class SQLiteStateStore:
             )
 
     def fail_worker_startup(
-        self, dag_id: str, run_id: str, task_id: str, *, message: str, log_path: str
+        self,
+        dag_id: str,
+        run_id: str,
+        task_id: str,
+        *,
+        message: str,
+        log_path: str | None,
     ) -> None:
         self.init_db()
         now = _utc_now()
@@ -1464,23 +1532,46 @@ class SQLiteStateStore:
                     to_clear=to_clear, blocked=blocked, dry_run=False
                 )
             run = connection.execute(
-                "SELECT state FROM dag_run WHERE dag_id = ? AND run_id = ?",
+                "SELECT state, run_type, backfill_id, backfill_max_active_runs "
+                "FROM dag_run "
+                "WHERE dag_id = ? AND run_id = ?",
                 (dag_id, run_id),
             ).fetchone()
             if run and run[0] in ("success", "failed"):
-                limit_row = connection.execute(
-                    "SELECT max_active_runs FROM dag_definition WHERE dag_id = ?",
-                    (dag_id,),
-                ).fetchone()
-                limit = limit_row[0] if limit_row else 1
-                active = connection.execute(
-                    "SELECT COUNT(*) FROM dag_run WHERE dag_id = ? AND state IN ('queued', 'running')",
-                    (dag_id,),
-                ).fetchone()[0]
-                if active >= limit:
+                if run[1] == "backfill":
+                    if run[3] is None:
+                        # 旧运行没有该列的值，沿用 backfill 元数据中的上限。
+                        limit_row = connection.execute(
+                            "SELECT max_active_runs FROM backfill "
+                            "WHERE dag_id = ? AND backfill_id = ?",
+                            (dag_id, run[2]),
+                        ).fetchone()
+                        limit = limit_row[0] if limit_row else None
+                    else:
+                        limit = run[3] if run[3] > 0 else None
+                    active = connection.execute(
+                        "SELECT COUNT(*) FROM dag_run WHERE dag_id = ? "
+                        "AND run_type = 'backfill' AND backfill_id = ? "
+                        "AND state IN ('queued', 'running')",
+                        (dag_id, run[2]),
+                    ).fetchone()[0]
+                else:
+                    limit_row = connection.execute(
+                        "SELECT max_active_runs FROM dag_definition WHERE dag_id = ?",
+                        (dag_id,),
+                    ).fetchone()
+                    limit = limit_row[0] if limit_row else 1
+                    active = connection.execute(
+                        "SELECT COUNT(*) FROM dag_run WHERE dag_id = ? "
+                        "AND run_type != 'backfill' "
+                        "AND state IN ('queued', 'running')",
+                        (dag_id,),
+                    ).fetchone()[0]
+                if limit is not None and active >= limit:
+                    group = f"backfill {run[2]!r}" if run[1] == "backfill" else "DAG"
                     blocked = [
                         ClearBlockedTask(
-                            task_id, state, f"DAG 已达到 max_active_runs={limit}。"
+                            task_id, state, f"{group} 已达到 max_active_runs={limit}。"
                         )
                         for task_id, state in rows
                         if task_id in to_clear
@@ -1570,7 +1661,9 @@ class SQLiteStateStore:
             WHERE dag_id = ? AND run_id = ?
         """
         params: list[Any] = [dag_id, run_id]
-        if task_ids:
+        if task_ids is not None:
+            if not task_ids:
+                return []
             placeholders = ",".join("?" for _ in task_ids)
             query += f" AND task_id IN ({placeholders})"
             params.extend(task_ids)

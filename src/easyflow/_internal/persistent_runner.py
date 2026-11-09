@@ -604,9 +604,13 @@ class PersistentDagRunner:
                 return
             except Exception as exc:
                 heartbeat.stop()
-                log_path.parent.mkdir(parents=True, exist_ok=True)
-                with log_path.open("a", encoding="utf-8") as log_file:
-                    log_file.write("".join(traceback.format_exception(exc)))
+                try:
+                    log_path.parent.mkdir(parents=True, exist_ok=True)
+                    with log_path.open("a", encoding="utf-8") as log_file:
+                        log_file.write("".join(traceback.format_exception(exc)))
+                except OSError:
+                    # 日志目录不可写时仍需结束 task_try，避免任务永久停在 running。
+                    pass
                 xcom_store.clear_task(task.task_id)
                 next_state = self.store.commit_failure(
                     dag_id=dag.dag_id,
@@ -663,9 +667,13 @@ class PersistentDagRunner:
     def _log_path(
         self, dag_id: str, run_id: str, task_id: str, try_number: int
     ) -> Path:
-        safe_run_id = "run_" + base64.urlsafe_b64encode(run_id.encode("utf-8")).decode(
-            "ascii"
-        ).rstrip("=")
+        raw_run_id = run_id.encode("utf-8")
+        encoded = base64.urlsafe_b64encode(raw_run_id).decode("ascii").rstrip("=")
+        safe_run_id = (
+            "run_" + encoded
+            if len(encoded) <= 200
+            else "run-hash-" + hashlib.sha256(raw_run_id).hexdigest()
+        )
         return (
             self.log_root / dag_id / safe_run_id / task_id / "-1" / f"{try_number}.log"
         )

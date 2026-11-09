@@ -25,3 +25,5 @@
 - 2026-11-08 23:45 Asia/Shanghai：[工作流详情内的运行历史结果](PLAN-20261108-009-model-unknown-workflow-run-history-OUTCOME.md)，实施并验证完成；本机静态入口已更新。
 - 2026-11-09 01:26 Asia/Shanghai：[easyflow-usage Skill 计划](PLAN-20261109-001-model-unknown-easyflow-usage-skill.md)，进行中。
 - 2026-11-09 01:32 Asia/Shanghai：[easyflow-usage Skill 结果](PLAN-20261109-001-model-unknown-easyflow-usage-skill-OUTCOME.md)，已完成；示例、隔离运行和 38 项相关测试通过。
+- 2026-11-10 01:14 Asia/Shanghai：[核心 Review 问题修复计划](PLAN-20261110-001-model-unknown-review-core-fixes.md)，进行中；覆盖调度、清理、预览及日志路径五处缺陷。
+- 2026-11-10 01:28 Asia/Shanghai：[核心 Review 问题修复结果](PLAN-20261110-001-model-unknown-review-core-fixes-OUTCOME.md)，五项缺陷已修复；163 项测试与针对性静态检查通过。

@@ -16,6 +16,7 @@ from pathlib import Path
 from easyflow._internal.dag_parser import DagSource, load_dag_snapshot
 from easyflow._internal.persistent_runner import PersistentDagRunner
 from easyflow._internal.schedules import (
+    MAX_CATCHUP_PER_SCAN,
     backfill_intervals,
     dag_timezone,
     scheduler_intervals,
@@ -61,9 +62,19 @@ class BackfillPreview:
     eligible: bool
 
 
-def _backfill_intervals(dag: object, start_date: date, end_date: date) -> list:
+MAX_BACKFILL_PREVIEW_INTERVALS = 1000
+
+
+def _backfill_intervals(
+    dag: object, start_date: date, end_date: date, *, max_intervals: int | None = None
+) -> list:
     intervals = backfill_intervals(
-        dag.schedule, start_date, end_date, dag_timezone(dag), anchor=dag.start_date
+        dag.schedule,
+        start_date,
+        end_date,
+        dag_timezone(dag),
+        anchor=dag.start_date,
+        max_intervals=max_intervals,
     )
     return [
         interval
@@ -91,10 +102,20 @@ def preview_backfill(
 ) -> list[BackfillPreview]:
     if reprocessing_behavior not in {"none", "failed", "completed"}:
         raise ValueError("reprocessing-behavior 必须是 none、failed 或 completed。")
+    intervals = _backfill_intervals(
+        dag, start_date, end_date, max_intervals=MAX_BACKFILL_PREVIEW_INTERVALS
+    )
+    if not intervals:
+        return []
+    latest_states = store.latest_dag_run_states_for_range(
+        dag_id=dag.dag_id,
+        start=intervals[0].logical_date,
+        end=intervals[-1].logical_date,
+    )
     result = []
-    for interval in _backfill_intervals(dag, start_date, end_date):
-        latest = store.latest_dag_run_state_for_logical_date(
-            dag_id=dag.dag_id, logical_date=interval.logical_date
+    for interval in intervals:
+        latest = latest_states.get(
+            interval.logical_date.astimezone(timezone.utc).isoformat()
         )
         eligible = (
             latest is None
@@ -312,13 +333,27 @@ def _run_scheduler_source_once(
         if store.is_dag_paused(dag.dag_id):
             break
         run_ids = store.list_active_dag_runs(dag.dag_id)
-        for interval in scheduler_intervals(
+        intervals = scheduler_intervals(
             dag,
             now,
             last_automated_date=store.latest_automated_logical_date(dag.dag_id),
-        ):
+        )
+        backfilled = (
+            store.backfilled_logical_dates(
+                dag.dag_id, intervals[0].logical_date, intervals[-1].logical_date
+            )
+            if intervals
+            else set()
+        )
+        last_covered = None
+        last_skipped = None
+        for interval in intervals:
             if not allowed():
                 break
+            if interval.logical_date.astimezone(timezone.utc).isoformat() in backfilled:
+                last_covered = interval.logical_date
+                last_skipped = interval.logical_date
+                continue
             try:
                 run_ids.append(
                     runner.create_scheduled_run(
@@ -326,12 +361,23 @@ def _run_scheduler_source_once(
                     )
                 )
             except ScheduledRunExists:
+                last_covered = interval.logical_date
+                last_skipped = interval.logical_date
                 continue
             except DagPaused:
                 break
             except DagRunCapacityError:
                 break
+            last_covered = interval.logical_date
+            last_skipped = None
+        if last_skipped is not None:
+            store.advance_schedule_cursor(dag.dag_id, last_skipped)
         if not run_ids:
+            if (
+                len(intervals) == MAX_CATCHUP_PER_SCAN
+                and last_covered == intervals[-1].logical_date
+            ):
+                continue
             break
         with ThreadPoolExecutor(max_workers=len(run_ids)) as pool:
             futures = [

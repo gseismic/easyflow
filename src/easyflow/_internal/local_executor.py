@@ -232,14 +232,19 @@ class LocalExecutor:
         runner = PersistentDagRunner(self.store, log_root=self.log_root)
         log_path = runner._log_path(self.dag.dag_id, self.run_id, task_id, 0)
         log_path = log_path.with_name(f"startup-{uuid.uuid4().hex}.log")
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(message + "\n", encoding="utf-8")
+        stored_path = None
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(message + "\n", encoding="utf-8")
+            stored_path = str(log_path)
+        except OSError:
+            pass
         self.store.fail_worker_startup(
             self.dag.dag_id,
             self.run_id,
             task_id,
             message=message,
-            log_path=str(log_path),
+            log_path=stored_path,
         )
 
 
