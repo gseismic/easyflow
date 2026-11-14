@@ -6,7 +6,7 @@ import sqlite3
 import time
 import traceback
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone, tzinfo
+from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -226,8 +226,8 @@ def _is_dag_paused(connection: sqlite3.Connection, dag_id: str) -> bool:
 
 class SQLiteStateStore:
     def __init__(self, database_url: str = "sqlite:///./.easyflow/easyflow.db") -> None:
-        self.database_url = database_url
-        self.path = path_from_database_url(database_url)
+        self.path = path_from_database_url(database_url).resolve()
+        self.database_url = f"sqlite:///{self.path}"
 
     def init_db(self) -> Path:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -897,6 +897,7 @@ class SQLiteStateStore:
         task_id: str,
         try_number: int,
         owner: str | None = None,
+        worker_pid: int | None = None,
         lease_seconds: int = 30,
         now: datetime | None = None,
     ) -> bool:
@@ -905,27 +906,33 @@ class SQLiteStateStore:
         if current.tzinfo is None:
             raise ValueError("now 必须带时区。")
         owner = owner or f"runner-{os.getpid()}"
+        worker_pid = os.getpid() if worker_pid is None else worker_pid
         now_iso = _iso(current)
         lease_until = _iso(current + timedelta(seconds=lease_seconds))
         with self._connect() as connection:
-            connection.execute("BEGIN")
+            connection.execute("BEGIN IMMEDIATE")
+            if now is None:
+                current = datetime.now(UTC)
+                now_iso = _iso(current)
+                lease_until = _iso(current + timedelta(seconds=lease_seconds))
             updated = connection.execute(
                 """
                 UPDATE task_instance
-                SET lease_expires_at = ?, last_heartbeat_at = ?, executor_id = ?, worker_pid = ?
+                SET lease_expires_at = ?, last_heartbeat_at = ?
                 WHERE dag_id = ? AND run_id = ? AND task_id = ? AND map_index = -1
                   AND state = ? AND try_number = ?
+                  AND executor_id = ? AND worker_pid = ?
                 """,
                 (
                     lease_until,
                     now_iso,
-                    owner,
-                    os.getpid(),
                     dag_id,
                     run_id,
                     task_id,
                     TaskInstanceState.RUNNING.value,
                     try_number,
+                    owner,
+                    worker_pid,
                 ),
             ).rowcount
             if updated != 1:
@@ -940,7 +947,7 @@ class SQLiteStateStore:
                 DO UPDATE SET heartbeat_at = excluded.heartbeat_at,
                               worker_pid = excluded.worker_pid
                 """,
-                (dag_id, run_id, task_id, try_number, now_iso, os.getpid()),
+                (dag_id, run_id, task_id, try_number, now_iso, worker_pid),
             )
         return True
 
@@ -1904,11 +1911,12 @@ def _retry_at(
 def _json_dumps_xcom(value: Any) -> str:
     try:
         encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        byte_count = len(encoded.encode("utf-8"))
     except (TypeError, ValueError) as exc:
         raise XComSerializationError(
             f"XCom value is not JSON serializable: {exc}"
         ) from exc
-    if len(encoded.encode("utf-8")) > MAX_XCOM_BYTES:
+    if byte_count > MAX_XCOM_BYTES:
         raise XComValueTooLargeError(f"XCom value exceeds {MAX_XCOM_BYTES} bytes.")
     return encoded
 

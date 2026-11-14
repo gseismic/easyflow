@@ -14,7 +14,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from easyflow._internal.dag_parser import DagSource, load_dag_snapshot
-from easyflow._internal.persistent_runner import PersistentDagRunner
+from easyflow._internal.persistent_runner import PersistentDagRunner, validate_executor
 from easyflow._internal.schedules import (
     MAX_CATCHUP_PER_SCAN,
     backfill_intervals,
@@ -133,6 +133,7 @@ def run_scheduler_once(
     executor: str = "sequential",
     parallelism: int = 1,
 ) -> list[ScheduledRunSummary]:
+    validate_executor(executor)
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         raise ValueError("now 必须带时区。")
@@ -166,6 +167,7 @@ def run_scheduler_once_for_sources(
     executor: str = "sequential",
     parallelism: int = 1,
 ) -> tuple[list[ScheduledRunSummary], list[SchedulerIssue]]:
+    validate_executor(executor)
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         raise ValueError("now 必须带时区。")
@@ -235,6 +237,7 @@ class SchedulerCoordinator:
         executor: str,
         parallelism: int,
     ) -> None:
+        validate_executor(executor)
         self.store = store
         self.heartbeat = heartbeat
         self.log_root = log_root
@@ -312,6 +315,7 @@ def _run_scheduler_source_once(
     should_continue: Callable[[], bool] | None = None,
     scheduler_fence: SchedulerFence | None = None,
 ) -> list[ScheduledRunSummary]:
+    validate_executor(executor)
     dag = source.dag
     allowed = should_continue or (lambda: True)
     runner = PersistentDagRunner(
@@ -412,6 +416,7 @@ def run_scheduler_loop(
     executor: str = "sequential",
     parallelism: int = 1,
 ) -> list[ScheduledRunSummary]:
+    validate_executor(executor)
     all_summaries: list[ScheduledRunSummary] = []
     loops = 0
     with scheduler_session(
@@ -455,6 +460,7 @@ def create_backfill(
     executor: str = "sequential",
     parallelism: int = 1,
 ) -> BackfillSummary:
+    validate_executor(executor)
     if reprocessing_behavior not in {"none", "failed", "completed"}:
         raise ValueError("reprocessing-behavior 必须是 none、failed 或 completed。")
     dag = load_dag_snapshot(file_path, dag_id)

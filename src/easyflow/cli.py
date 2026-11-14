@@ -19,7 +19,11 @@ from easyflow._internal.dag_parser import (
     inspect_dags_from_file,
     load_dag_from_file,
 )
-from easyflow._internal.persistent_runner import PersistentDagRunner
+from easyflow._internal.persistent_runner import (
+    ExecutorName,
+    PersistentDagRunner,
+    validate_executor,
+)
 from easyflow._internal.scheduler import (
     ScheduledRunSummary,
     SchedulerCoordinator,
@@ -200,13 +204,14 @@ def dags_trigger(
     conf_json: str = "{}",
     database_url: str = DEFAULT_DATABASE_URL,
     log_root: str = DEFAULT_LOG_ROOT,
-    executor: str = "sequential",
+    executor: ExecutorName = ExecutorName.SEQUENTIAL,
     parallelism: int | None = None,
 ) -> None:
     """创建并执行一次手动运行。"""
     source = _source(dag_id, file, dags_folder)
     store = SQLiteStateStore(database_url)
     try:
+        validate_executor(executor)
         conf = json.loads(conf_json)
         if not isinstance(conf, dict):
             raise ValueError("--conf-json 必须是 JSON 对象。")
@@ -337,11 +342,12 @@ def scheduler(
     lease_seconds: int = 30,
     interval_seconds: float = 5.0,
     max_loops: int | None = None,
-    executor: str = "sequential",
+    executor: ExecutorName = ExecutorName.SEQUENTIAL,
     parallelism: int | None = None,
 ) -> None:
     """运行调度器。"""
     try:
+        validate_executor(executor)
         store = SQLiteStateStore(database_url)
         chosen_parallelism = _configure_parallelism(store, parallelism)
         if once:
@@ -429,7 +435,7 @@ def backfill_create(
     backfill_id: str | None = None,
     database_url: str = DEFAULT_DATABASE_URL,
     log_root: str = DEFAULT_LOG_ROOT,
-    executor: str = "sequential",
+    executor: ExecutorName = ExecutorName.SEQUENTIAL,
     parallelism: int | None = None,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
 ) -> None:
@@ -437,6 +443,7 @@ def backfill_create(
     source = _source(dag_id, file, dags_folder)
     store = SQLiteStateStore(database_url)
     try:
+        validate_executor(executor)
         start, end = (
             parse_backfill_boundary(start_date),
             parse_backfill_boundary(end_date),
@@ -516,10 +523,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = app(args=argv, prog_name="easyflow", standalone_mode=False)
         return result if isinstance(result, int) else 0
-    except click.ClickException as exc:
+    except (click.ClickException, typer.BadParameter) as exc:
         exc.show()
         return exc.exit_code
-    except click.exceptions.Exit as exc:
+    except (click.exceptions.Exit, typer.Exit) as exc:
         return exc.exit_code
 
 
@@ -588,6 +595,7 @@ def _resolve_dag_sources(
 def _run_scheduler_loop_for_sources(
     args: SimpleNamespace,
 ) -> tuple[list[ScheduledRunSummary], list[SchedulerIssue]]:
+    validate_executor(args.executor)
     store = SQLiteStateStore(args.database_url)
     all_summaries: list[ScheduledRunSummary] = []
     all_issues: list[SchedulerIssue] = []

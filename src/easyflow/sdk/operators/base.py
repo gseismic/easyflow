@@ -4,6 +4,7 @@ import copy
 from collections.abc import Iterable
 from datetime import timedelta
 from functools import wraps
+from itertools import pairwise
 from typing import Any, ClassVar
 
 from easyflow.sdk._compat import OPERATOR_UNSUPPORTED_KWARGS, reject_kwargs
@@ -166,9 +167,20 @@ class BaseOperator:
 
 
 def chain(*tasks: Any) -> None:
-    for left, right in zip(tasks, tasks[1:]):
-        if _is_many(left):
-            for item in left:
-                _as_operator(item).set_downstream(right)
+    """连接相邻任务：两个列表逐项配对，单任务与列表扇出或扇入。"""
+    if len(tasks) < 2:
+        return
+    groups = [list(task) if _is_many(task) else task for task in tasks]
+    # 先校验所有长度，避免报错时已经写入部分依赖；中间迭代器只消费一次。
+    for left, right in pairwise(groups):
+        if isinstance(left, list) and isinstance(right, list) and len(left) != len(right):
+            raise ValueError("chain 相邻任务列表的长度必须相同。")
+    for left, right in pairwise(groups):
+        if isinstance(left, list) and isinstance(right, list):
+            for source, target in zip(left, right):
+                _as_operator(source).set_downstream(target)
+        elif isinstance(left, list):
+            for source in left:
+                _as_operator(source).set_downstream(right)
         else:
             _as_operator(left).set_downstream(right)

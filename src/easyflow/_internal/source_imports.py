@@ -61,6 +61,8 @@ def local_source_imports(dag_path: Path) -> Iterator[None]:
     with _IMPORT_LOCK:
         # 父包也一并刷新，防止它继续引用传递依赖的旧函数或模块。
         for name, module in list(sys.modules.items()):
+            if name in {"__main__", "__mp_main__"}:
+                continue
             loader = getattr(module, "__loader__", None)
             if not isinstance(loader, SourceFileLoader):
                 continue

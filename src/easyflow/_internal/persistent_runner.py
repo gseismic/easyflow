@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-import base64
 import copy
 import errno
 import hashlib
 import io
+import json
 import os
-import threading
 import time
 import traceback
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -29,9 +29,11 @@ from easyflow._internal.state_store import (
     SQLiteStateStore,
     TaskCapacityFull,
     DagPaused,
+    _json_dumps_xcom,
     run_timezone,
     task_retry_settings,
 )
+from easyflow._internal.task_heartbeat import TaskHeartbeat
 from easyflow.sdk.context import set_current_context
 from easyflow.sdk.dag import DAG
 from easyflow.sdk.exceptions import AirflowSkipException
@@ -55,24 +57,34 @@ class PersistentRunResult:
     task_states: dict[str, TaskInstanceState | None]
 
 
+class ExecutorName(str, Enum):
+    SEQUENTIAL = "sequential"
+    LOCAL = "local"
+
+
+def validate_executor(executor: str) -> None:
+    if executor not in {ExecutorName.SEQUENTIAL, ExecutorName.LOCAL}:
+        raise ValueError(f"未知 executor: {executor}；可选值为 sequential、local。")
+
+
 class PersistentXComStore:
     def __init__(self, store: SQLiteStateStore, dag_id: str, run_id: str) -> None:
         self.store = store
         self.dag_id = dag_id
         self.run_id = run_id
-        self.pending: dict[tuple[str, str], Any] = {}
+        self.pending: dict[tuple[str, str], str] = {}
 
     def push(self, task_id: str, key: str, value: Any) -> None:
-        self.pending[(task_id, key)] = value
+        self.pending[(task_id, key)] = _json_dumps_xcom(value)
 
     def pull(self, task_id: str, key: str = "return_value") -> Any:
         if (task_id, key) in self.pending:
-            return self.pending[(task_id, key)]
+            return json.loads(self.pending[(task_id, key)])
         return self.store.pull_xcom(self.dag_id, self.run_id, task_id, key)
 
     def values_for_task(self, task_id: str) -> dict[str, Any]:
         return {
-            key: value
+            key: json.loads(value)
             for (stored_task_id, key), value in self.pending.items()
             if stored_task_id == task_id
         }
@@ -214,6 +226,7 @@ class PersistentDagRunner:
         parallelism: int = 1,
         wait_for_retry: bool = True,
     ) -> PersistentRunResult:
+        validate_executor(executor)
         self.store.configure_parallelism(parallelism)
         with self._run_lock(dag.dag_id, run_id) as acquired:
             if not acquired:
@@ -332,8 +345,6 @@ class PersistentDagRunner:
         logical_date = datetime.fromisoformat(record.logical_date).astimezone(zone)
         conf = {}
         if record.conf_json:
-            import json
-
             conf = json.loads(record.conf_json)
         if executor == "local":
             if file_path is None:
@@ -350,8 +361,6 @@ class PersistentDagRunner:
                 parallelism=parallelism,
                 wait_for_retry=wait_for_retry,
             )
-        if executor != "sequential":
-            raise ValueError(f"未知 executor: {executor}")
         self.store.recover_orphaned_tasks_for_run(dag=dag, run_id=run_id)
         self.store.set_dag_run_state(dag.dag_id, run_id, DagRunState.RUNNING)
         xcom_store = PersistentXComStore(self.store, dag.dag_id, run_id)
@@ -551,7 +560,7 @@ class PersistentDagRunner:
                 return
             if try_number is None:
                 return
-            heartbeat = _HeartbeatThread(
+            heartbeat = TaskHeartbeat(
                 store=self.store,
                 dag_id=dag.dag_id,
                 run_id=run_id,
@@ -560,16 +569,16 @@ class PersistentDagRunner:
                 owner=self.runner_id,
                 lease_seconds=self.task_lease_seconds,
             )
-            heartbeat.start()
             log_path = self._log_path(dag.dag_id, run_id, task.task_id, try_number)
-            self.store.set_task_try_log_path(
-                dag.dag_id,
-                run_id,
-                task.task_id,
-                try_number,
-                str(log_path),
-            )
             try:
+                self.store.set_task_try_log_path(
+                    dag.dag_id,
+                    run_id,
+                    task.task_id,
+                    try_number,
+                    str(log_path),
+                )
+                heartbeat.start()
                 result = self._run_single_attempt(
                     dag=dag,
                     task=task,
@@ -579,7 +588,6 @@ class PersistentDagRunner:
                     xcom_store=xcom_store,
                     log_path=log_path,
                 )
-                heartbeat.stop()
                 if task.do_xcom_push:
                     _push_result(task, result, xcom_store)
                 self.store.commit_task_terminal(
@@ -592,7 +600,6 @@ class PersistentDagRunner:
                 xcom_store.clear_task(task.task_id)
                 return
             except AirflowSkipException:
-                heartbeat.stop()
                 xcom_store.clear_task(task.task_id)
                 self.store.commit_task_terminal(
                     dag_id=dag.dag_id,
@@ -604,7 +611,6 @@ class PersistentDagRunner:
                 )
                 return
             except Exception as exc:
-                heartbeat.stop()
                 try:
                     log_path.parent.mkdir(parents=True, exist_ok=True)
                     with log_path.open("a", encoding="utf-8") as log_file:
@@ -626,6 +632,8 @@ class PersistentDagRunner:
                 )
                 if next_state == TaskInstanceState.FAILED or single_attempt:
                     return
+            finally:
+                heartbeat.stop()
 
     def _run_single_attempt(
         self,
@@ -668,16 +676,22 @@ class PersistentDagRunner:
     def _log_path(
         self, dag_id: str, run_id: str, task_id: str, try_number: int
     ) -> Path:
-        raw_run_id = run_id.encode("utf-8")
-        encoded = base64.urlsafe_b64encode(raw_run_id).decode("ascii").rstrip("=")
-        safe_run_id = (
-            "run_" + encoded
-            if len(encoded) <= 200
-            else "run-hash-" + hashlib.sha256(raw_run_id).hexdigest()
-        )
         return (
-            self.log_root / dag_id / safe_run_id / task_id / "-1" / f"{try_number}.log"
+            self.log_root
+            / _log_component("dag", dag_id)
+            / _log_component("run", run_id)
+            / _log_component("task", task_id)
+            / "-1"
+            / f"{try_number}.log"
         )
+
+
+def _log_component(kind: str, value: str) -> str:
+    raw = value.encode("utf-8")
+    encoded = raw.hex()
+    if len(encoded) <= 200:
+        return f"{kind}_{encoded}"
+    return f"{kind}-hash-{hashlib.sha256(raw).hexdigest()}"
 
 
 class _Tee(io.TextIOBase):
@@ -695,49 +709,3 @@ class _Tee(io.TextIOBase):
     def flush(self) -> None:
         self.file.flush()
         self.stream.flush()
-
-
-class _HeartbeatThread:
-    def __init__(
-        self,
-        *,
-        store: SQLiteStateStore,
-        dag_id: str,
-        run_id: str,
-        task_id: str,
-        try_number: int,
-        owner: str,
-        lease_seconds: int,
-    ) -> None:
-        self.store = store
-        self.dag_id = dag_id
-        self.run_id = run_id
-        self.task_id = task_id
-        self.try_number = try_number
-        self.owner = owner
-        self.lease_seconds = lease_seconds
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-
-    def start(self) -> None:
-        self._renew()
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        self._thread.join(timeout=2)
-
-    def _run(self) -> None:
-        interval = max(0.2, min(1.0, self.lease_seconds / 3))
-        while not self._stop.wait(interval):
-            self._renew()
-
-    def _renew(self) -> None:
-        self.store.renew_task_lease(
-            dag_id=self.dag_id,
-            run_id=self.run_id,
-            task_id=self.task_id,
-            try_number=self.try_number,
-            owner=self.owner,
-            lease_seconds=self.lease_seconds,
-        )

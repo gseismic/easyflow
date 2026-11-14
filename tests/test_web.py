@@ -1,10 +1,24 @@
 from __future__ import annotations
 
+import time
+
 from fastapi.testclient import TestClient
 
 from easyflow._internal.dag_parser import load_dag_snapshot
 from easyflow._internal.persistent_runner import PersistentDagRunner
 from easyflow.web.app import create_app
+
+
+def loaded_dags(client):
+    deadline = time.monotonic() + 5
+    while True:
+        response = client.get("/api/dags")
+        assert response.status_code == 200
+        overview = response.json()
+        if not overview.get("loading", False):
+            return overview
+        assert time.monotonic() < deadline, overview
+        time.sleep(0.05)
 
 
 def test_web_dag_run_logs_pause_and_clear(tmp_path):
@@ -34,7 +48,7 @@ with DAG("demo") as dag:
     )
     assert login.status_code == 200
     client.headers["X-CSRF-Token"] = login.json()["csrf_token"]
-    overview = client.get("/api/dags").json()
+    overview = loaded_dags(client)
     assert [dag["dag_id"] for dag in overview["dags"]] == ["demo"]
     assert not overview["scheduler_running"]
     assert client.get("/").status_code == 200
@@ -102,9 +116,7 @@ def test_web_backfill_preview_rejects_oversized_range(tmp_path):
         json={"username": "admin", "password": "a sufficiently long password"},
     )
     client.headers["X-CSRF-Token"] = login.json()["csrf_token"]
-    assert [dag["dag_id"] for dag in client.get("/api/dags").json()["dags"]] == [
-        "minute"
-    ]
+    assert [dag["dag_id"] for dag in loaded_dags(client)["dags"]] == ["minute"]
     response = client.post(
         "/api/dags/minute/backfill-preview",
         json={"start_date": "2026-07-01", "end_date": "2026-07-01"},
