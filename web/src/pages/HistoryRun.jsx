@@ -4,18 +4,15 @@ import RunMetadata from "../components/RunMetadata";
 import Status from "../components/Status";
 import TaskDetails from "../components/TaskDetails";
 import TaskLog from "../components/TaskLog";
+import { runDetailUrl, taskLogUrl } from "../runApi";
 
 export default function HistoryRun({ dagId, runId, backHref, backLabel = "返回运行历史" }) {
   const [taskId, setTaskId] = useState("");
   const [attempt, setAttempt] = useState("");
-  const identity = new URLSearchParams({ dag_id: dagId, run_id: runId });
-  const run = usePolling(`/api/history/run?${identity}`, 3000);
+  const run = usePolling(runDetailUrl(dagId, runId), 3000);
   const dag = usePolling(`/api/dags/${part(dagId)}`);
-  const logParams = new URLSearchParams(identity);
-  if (taskId) logParams.set("task_id", taskId);
-  if (attempt) logParams.set("attempt", attempt);
   const logs = usePolling(
-    taskId ? `/api/history/task-log?${logParams}` : null,
+    taskId ? taskLogUrl(dagId, runId, taskId, attempt) : null,
     3000,
   );
   const taskIds = Object.keys(run.data?.tasks || {}).sort();

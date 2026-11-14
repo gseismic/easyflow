@@ -823,6 +823,7 @@ class SQLiteStateStore:
                 SET state = ?,
                     try_number = ?,
                     started_at = ?,
+                    ended_at = NULL,
                     next_retry_at = NULL,
                     executor_id = ?,
                     worker_pid = ?,
@@ -1448,15 +1449,53 @@ class SQLiteStateStore:
         run_id: str,
         expected_hash: str | None,
         actual_hash: str,
-    ) -> None:
-        now = _utc_now()
+    ) -> bool:
+        """结束定义失配运行；仍有运行中任务持有租约时返回 False，等待再次扫描。"""
         payload = {
             "expected_hash": expected_hash,
             "actual_hash": actual_hash,
             "error_code": "DAG_DEFINITION_CHANGED",
         }
         with self._connect() as connection:
-            connection.execute("BEGIN")
+            connection.execute("BEGIN IMMEDIATE")
+            now = _utc_now()
+            # 使用持久化任务列表，覆盖新定义中已删除的任务；只终止失效租约。
+            expired = connection.execute(
+                "SELECT task_id, map_index, try_number FROM task_instance "
+                "WHERE dag_id = ? AND run_id = ? AND state = 'running' "
+                "AND lease_expires_at <= ?",
+                (dag_id, run_id, now),
+            ).fetchall()
+            for task_id, map_index, try_number in expired:
+                connection.execute(
+                    "UPDATE task_try SET state = 'failed', ended_at = ?, "
+                    "error_code = 'DAG_DEFINITION_CHANGED', error_message = ? "
+                    "WHERE dag_id = ? AND run_id = ? AND task_id = ? "
+                    "AND map_index = ? AND try_number = ?",
+                    (
+                        now,
+                        "任务租约已过期且 DAG 定义已改变。",
+                        dag_id,
+                        run_id,
+                        task_id,
+                        map_index,
+                        try_number,
+                    ),
+                )
+                connection.execute(
+                    "UPDATE task_instance SET state = 'failed', ended_at = ?, "
+                    "next_retry_at = NULL, lease_expires_at = NULL, "
+                    "last_heartbeat_at = NULL, executor_id = NULL, worker_pid = NULL "
+                    "WHERE dag_id = ? AND run_id = ? AND task_id = ? AND map_index = ?",
+                    (now, dag_id, run_id, task_id, map_index),
+                )
+            # 活跃任务仍可提交结果；保持运行可扫描，待任务结束或租约失效后再失败。
+            if connection.execute(
+                "SELECT 1 FROM task_instance WHERE dag_id = ? AND run_id = ? "
+                "AND state = 'running' LIMIT 1",
+                (dag_id, run_id),
+            ).fetchone():
+                return False
             connection.execute(
                 """
                 UPDATE dag_run
@@ -1485,6 +1524,7 @@ class SQLiteStateStore:
                     now,
                 ),
             )
+        return True
 
     def preview_clear_task_instances(
         self,

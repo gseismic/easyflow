@@ -25,3 +25,11 @@
 - 更新模型：Codex，基于 GPT-6；实际模型 ID 未由环境提供。
 - `WORKTREE` 以完整提交 `b11a3a42c4c62e08ba28cbea1d4eabb64de1487b` 为基准；本次 Ruff 对比涉及的相关未提交代码文件为 `src/easyflow/web/catalog.py`、`src/easyflow/web/service.py` 和 `tests/test_web_project_search.py`。检查范围还包括基准中的其他 `src/`、`tests/` 和 `examples/` 文件。
 - 依据：对基准与当前工作区的 Ruff JSON 结果按文件、规则和信息计数，均为 195 项、无新增；状态保持未解决。
+
+## 2026-11-15 01:33 Asia/Shanghai：六项 Review 修复后的基线复核
+
+- 更新模型：Codex（基于 GPT-6，环境未提供完整模型 ID）。
+- 状态保持未解决；本次未调整 lint 规则或处理范围外基线问题。
+- 对比版本：基准 `d98476027e7edc68ddc8458003dfb0aafa2db5b3` 与本次 `WORKTREE`。相关修改为 `src/easyflow/_internal/{persistent_runner,scheduler,schedules,state_store}.py`、`src/easyflow/web/app.py`、`src/easyflow/web/routers/runs.py` 和新增 `tests/test_review_six_fixes.py`。
+- 验证：使用同一个 `uv run ruff check --output-format json` 检查两份代码的 `src tests examples`，按相对文件、规则及信息计数，基准 201 项，当前 197 项，新增 0 项、减少 4 项（来自移除回补后置过滤中的重复时区转换）。默认检查仍以非零状态退出；显式 `--select E4,E7,E9,F` 检查通过，新测试文件的默认检查通过。
+- 关联结果：`docs/plans/PLAN-20261115-001-model-unknown-review-six-fixes-OUTCOME.md`。修复尚未提交，没有新的修复 commit。

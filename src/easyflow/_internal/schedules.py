@@ -15,7 +15,7 @@ from easyflow._internal.cron import (
 _PRESETS = {
     "@hourly": "0 * * * *",
     "@daily": "0 0 * * *",
-    "@weekly": "0 0 * * 1",
+    "@weekly": "0 0 * * 0",
     "@monthly": "0 0 1 * *",
     "@yearly": "0 0 1 1 *",
 }
@@ -141,6 +141,8 @@ def backfill_intervals(
     *,
     anchor: datetime | None = None,
     max_intervals: int | None = None,
+    start_bound: datetime | None = None,
+    end_bound: datetime | None = None,
 ) -> list[DataInterval]:
     if schedule is None:
         raise ValueError("无 schedule 的 DAG 不支持 backfill。")
@@ -150,6 +152,13 @@ def backfill_intervals(
         raise ValueError("end-date 必须大于等于 start-date。")
     if max_intervals is not None and max_intervals < 1:
         raise ValueError("max_intervals 必须大于 0。")
+    anchor = anchor or start
+    if start_bound is not None and _utc(start_bound) > _utc(start):
+        start = start_bound.astimezone(tz)
+    if end_bound is not None and _utc(end_bound) < _utc(end):
+        end = end_bound.astimezone(tz)
+    if _utc(start) > _utc(end):
+        return []
     if schedule == "@once":
         logical = anchor.astimezone(tz) if anchor is not None else start
         return (
@@ -157,7 +166,7 @@ def backfill_intervals(
             if _utc(start) <= _utc(logical) <= _utc(end)
             else []
         )
-    current = _ceil_logical_date(schedule, start, anchor=anchor or start)
+    current = _ceil_logical_date(schedule, start, anchor=anchor)
     intervals = []
     while _utc(current) <= _utc(end):
         if max_intervals is not None and len(intervals) >= max_intervals:

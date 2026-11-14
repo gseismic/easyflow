@@ -92,6 +92,7 @@ def create_app(*, dags_folder: str, database_url: str, log_root: str) -> FastAPI
     app.include_router(dags.router)
     app.include_router(history.router)
     app.include_router(runs.router)
+    app.include_router(runs.query_router)
     app.mount(
         "/assets",
         StaticFiles(directory=STATIC / "assets", check_dir=False),

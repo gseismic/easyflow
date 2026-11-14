@@ -11,6 +11,7 @@ import TaskDetails from "../components/TaskDetails";
 import TaskLog from "../components/TaskLog";
 import TriggerDialog from "../components/TriggerDialog";
 import { workflowHref } from "../listRoute";
+import { runDetailUrl, taskLogUrl } from "../runApi";
 import WorkflowRunHistory from "./WorkflowRunHistory";
 
 const runStates = {
@@ -43,11 +44,11 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
   useEffect(() => {
     if (!taskId && dag?.tasks?.length) setTaskId(dag.tasks[0].task_id);
   }, [dag, taskId]);
-  const runBase = tab === "run" && runId ? `${base}/runs/${part(runId)}` : null;
-  const run = usePolling(runBase, 3000);
+  const runPath = tab === "run" && runId ? runDetailUrl(dagId, runId) : null;
+  const run = usePolling(runPath, 3000);
   const logPath =
-    runBase && taskId
-      ? `${runBase}/tasks/${part(taskId)}/logs${attempt ? `?attempt=${part(attempt)}` : ""}`
+    runPath && taskId
+      ? taskLogUrl(dagId, runId, taskId, attempt)
       : null;
   const logs = usePolling(logPath, 3000);
   const refresh = () => {
@@ -328,7 +329,8 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
       )}
       {isAdmin && dialog === "clear" && (
         <ClearDialog
-          runBase={runBase}
+          dagId={dagId}
+          runId={runId}
           taskId={taskId}
           onClose={() => setDialog("")}
           onDone={cleared}

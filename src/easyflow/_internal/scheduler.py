@@ -72,28 +72,16 @@ def _backfill_intervals(
     *,
     max_intervals: int | None = None,
 ) -> list:
-    intervals = backfill_intervals(
+    return backfill_intervals(
         dag.schedule,
         start_date,
         end_date,
         dag_timezone(dag),
         anchor=dag.start_date,
         max_intervals=max_intervals,
+        start_bound=dag.start_date,
+        end_bound=dag.end_date,
     )
-    return [
-        interval
-        for interval in intervals
-        if (
-            dag.start_date is None
-            or interval.logical_date.astimezone(timezone.utc)
-            >= dag.start_date.astimezone(timezone.utc)
-        )
-        and (
-            dag.end_date is None
-            or interval.logical_date.astimezone(timezone.utc)
-            <= dag.end_date.astimezone(timezone.utc)
-        )
-    ]
 
 
 def preview_backfill(

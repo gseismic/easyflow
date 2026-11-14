@@ -93,7 +93,7 @@ class PersistentDagRunner:
         scheduler_fence: SchedulerFence | None = None,
     ) -> None:
         self.store = store
-        self.log_root = Path(log_root)
+        self.log_root = Path(log_root).resolve()
         self.task_lease_seconds = task_lease_seconds
         self.runner_id = f"runner-{os.getpid()}"
         self.should_continue = should_continue or (lambda: True)
@@ -312,7 +312,7 @@ class PersistentDagRunner:
                 record.definition_hash != current_hash
                 or record.definition_hash != loaded_hash
             ):
-                self.store.fail_dag_run_definition_changed(
+                failed = self.store.fail_dag_run_definition_changed(
                     dag_id=dag.dag_id,
                     run_id=run_id,
                     expected_hash=record.definition_hash,
@@ -325,7 +325,7 @@ class PersistentDagRunner:
                 return PersistentRunResult(
                     dag_id=dag.dag_id,
                     run_id=run_id,
-                    state=DagRunState.FAILED,
+                    state=DagRunState.FAILED if failed else DagRunState(record.state),
                     task_states=self.store.list_task_states(dag.dag_id, run_id),
                 )
         zone = run_timezone(record.logical_timezone)

@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { post } from "../api";
+import { clearRunUrl } from "../runApi";
 import Modal from "./Modal";
 
-export default function ClearDialog({ runBase, taskId, onClose, onDone }) {
+export default function ClearDialog({ dagId, runId, taskId, onClose, onDone }) {
   const [scope, setScope] = useState("task");
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -21,14 +22,14 @@ export default function ClearDialog({ runBase, taskId, onClose, onDone }) {
   const inspect = () =>
     action(async () => {
       setPreview(
-        await post(`${runBase}/clear-preview`, {
+        await post(clearRunUrl(dagId, runId, true), {
           task_ids: scope === "task" ? [taskId] : null,
         }),
       );
     });
   const clear = () =>
     action(async () => {
-      onDone(await post(`${runBase}/clear`, { task_ids: preview.to_clear }));
+      onDone(await post(clearRunUrl(dagId, runId), { task_ids: preview.to_clear }));
     });
   return (
     <Modal title="预览重跑" onClose={onClose}>

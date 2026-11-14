@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/dags/{dag_id}/runs/{run_id}")
+query_router = APIRouter(prefix="/api/runs")
 
 
 class ClearRequest(BaseModel):
@@ -35,6 +36,7 @@ def task_logs(
 
 
 @router.post("/clear-preview")
+@query_router.post("/clear-preview")
 def clear_preview(dag_id: str, run_id: str, body: ClearRequest, request: Request):
     service, _ = _check_run(request, dag_id, run_id)
     result = service.store.preview_clear_task_instances(
@@ -50,6 +52,7 @@ def clear_preview(dag_id: str, run_id: str, body: ClearRequest, request: Request
 
 
 @router.post("/clear")
+@query_router.post("/clear")
 def clear_tasks(dag_id: str, run_id: str, body: ClearRequest, request: Request):
     service, _ = _check_run(request, dag_id, run_id)
     result = service.store.clear_task_instances(
