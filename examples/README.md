@@ -1,31 +1,33 @@
 # 示例
 
-这些示例覆盖 easyflow 和 Airflow 3.2 的常用交集。每个 `.py` 都是独立的 DAG 文件，默认使用 easyflow；在 Airflow 环境中运行时设置 `EASYFLOW_EXAMPLE_ENGINE=airflow`。Airflow 的 DAG 解析进程和任务执行进程都需要这个设置，即使两个引擎安装在同一个环境中也应明确选择。示例不需要业务数据库、网络服务等外部业务依赖；调度引擎仍需自己的状态库，量化示例还会写本地文件。
+这 12 个示例按不同用户任务组织，覆盖 easyflow 和 Airflow 3.2 的常用交集。每个 `.py` 都是独立的 DAG 文件，默认使用 easyflow；在 Airflow 环境中运行时设置 `EASYFLOW_EXAMPLE_ENGINE=airflow`。Airflow 的 DAG 解析进程和任务执行进程都需要这个设置，即使两个引擎安装在同一个环境中也应明确选择。示例不需要业务数据库、网络服务等外部业务依赖；调度引擎仍需自己的状态库，重试示例使用本机临时文件，量化示例会保存本地数据。
 
 `301_operator_bash.py` 需要系统安装 Bash；其他示例不依赖 Bash。项目安装时会提供 `tzdata`，供缺少系统时区数据库的环境解析 IANA 时区。
 
-文件采用分级编号：大类编号 1 位、类内序号 2 位，例如 `201` 表示大类 `2` 的第 `01` 个示例。DAG ID 是独立标识，不随文件名推导。
+建议先读 `001`、`002`，掌握最小运行和任务间数据传递；日常使用接着看 `101`、`401`、`402`，再按需阅读依赖、Operator 和完整的行情分区场景。工作日时区调度看 `102`，一次性初始化看 `103`。
+
+文件采用分级编号：大类编号 1 位、类内序号 2 位，例如 `201` 表示大类 `2` 的第 `01` 个示例。已有编号保留，删除后不重排。DAG ID 是独立标识，不随文件名推导。
 
 | 文件 | DAG ID | 场景 |
 | --- | --- | --- |
 | [001_basic_manual.py](001_basic_manual.py) | `example_manual_hello` | 手动触发一个 Python 任务 |
-| [002_basic_taskflow_etl.py](002_basic_taskflow_etl.py) | `example_taskflow_etl` | `@dag`、`@task`、ETL 和任务间返回值 |
-| [003_basic_project_quant.py](003_basic_project_quant.py) | `example_project_quant` | 量化项目和行情标签；仅手动运行 |
-| [004_basic_project_analytics.py](004_basic_project_analytics.py) | `example_project_analytics` | 分析项目和报表标签；仅手动运行 |
+| [002_basic_taskflow_etl.py](002_basic_taskflow_etl.py) | `example_taskflow_etl` | 订单 ETL、任务间返回值；归入 `analytics` 项目 |
 | [101_schedule_daily.py](101_schedule_daily.py) | `example_daily_schedule` | 每日调度和逻辑日期 |
 | [102_schedule_weekday.py](102_schedule_weekday.py) | `example_weekday_schedule` | Cron、工作日和上海时区 |
 | [103_schedule_once.py](103_schedule_once.py) | `example_run_once` | 调度一次的初始化任务 |
 | [201_dependency_fanout.py](201_dependency_fanout.py) | `example_fanout_fanin` | 并行分发、汇合和显式依赖 |
 | [202_dependency_trigger_rule.py](202_dependency_trigger_rule.py) | `example_trigger_rule` | 上游跳过、`all_success` 与 `all_done` |
-| [301_operator_bash.py](301_operator_bash.py) | `example_bash_operator` | Bash 输出传给 TaskFlow 任务 |
+| [301_operator_bash.py](301_operator_bash.py) | `example_bash_operator` | 模板参数和运行日期通过环境变量传给 Bash，输出交给 TaskFlow |
 | [302_operator_python.py](302_operator_python.py) | `example_python_operator` | PythonOperator 与 TaskFlow 任务协作 |
 | [401_runtime_params.py](401_runtime_params.py) | `example_runtime_params` | 默认参数和手动运行时覆盖 |
-| [402_runtime_retry.py](402_runtime_retry.py) | `example_retry` | 默认重试次数和延迟 |
-| [501_quant_daily_prices.py](501_quant_daily_prices.py) | `quant_daily_prices` | 每日行情分区、业务日期和本地文件输出 |
+| [402_runtime_retry.py](402_runtime_retry.py) | `example_retry` | 临时故障后重试成功，或持续失败直至重试耗尽 |
+| [501_quant_daily_prices.py](501_quant_daily_prices.py) | `quant_daily_prices` | 每日行情分区、业务日期和本地文件输出；归入 `quant` 项目 |
+
+项目筛选直接使用 ETL 和行情示例的 `project:analytics`、`project:quant` 标签。原 `003`、`004` 标签专用示例已移除；已有运行记录仍保留，可在“运行历史”中按原 DAG ID 搜索，不再用于新建运行。
 
 ## easyflow 运行
 
-在项目根目录启动 `uv run easyflow web --dags-folder examples`，到 Web 页面选择工作流并手动触发。`schedule=None` 的示例只会手动运行；`@daily`、Cron、`@once` 示例启用调度后也可能自动运行。除了量化示例，任务只打印或返回演示数据。
+先按[快速开始](../README.md#快速开始)安装项目并创建账户，再在项目根目录启动 `uv run easyflow web --dags-folder examples`，到 Web 页面选择工作流并手动触发。`schedule=None` 的示例只会手动运行；`@daily`、Cron、`@once` 示例启用调度后也可能自动运行。除了重试所用临时标记和量化输出，任务只打印或返回演示数据。
 
 也可以在命令行执行一次不写入 easyflow 状态库的内存测试：
 
@@ -33,9 +35,16 @@
 uv run easyflow dags test example_taskflow_etl --file examples/002_basic_taskflow_etl.py
 uv run easyflow dags test example_runtime_params --file examples/401_runtime_params.py \
   --conf-json '{"symbol":"BTC","quantity":3}'
+uv run easyflow dags test example_bash_operator --file examples/301_operator_bash.py \
+  --logical-date 2026-07-03T00:00:00+00:00 --conf-json '{"symbol":"BTC"}'
+uv run easyflow dags test example_retry --file examples/402_runtime_retry.py
 ```
 
-在 Web 的“触发运行”中可输入 `{"symbol":"BTC","quantity":3}` 来试运行参数示例。重试示例正常情况下成功；输入 `{"fail":true}` 将故意失败，并在初次执行后最多重试两次。`all_done` 表示上游完成后继续，即使上游失败也可能继续；当它是成功的叶任务时，整个 DAG 的结果可能掩盖上游失败，实际工作流应按需要另行处理失败。
+在 Web 的“触发运行”中可输入 `{"symbol":"BTC","quantity":3}` 来试运行参数示例。上面的 Bash 命令应输出 `BTC 2026-07-03`；模板值经环境变量传入固定的 shell 命令。没有逻辑日期时显示“未提供”。
+
+重试示例的准备任务为每次运行生成独立临时标记，调用任务首次删除标记并模拟失败，第二次尝试成功；正常完成后没有标记残留。输入 `{"fail":true}` 会持续失败，初次执行后再重试两次，最终 DAG 失败。Web 或持久化运行按配置等待 3 秒后重试，内存测试会立即重试。任务进程需要共享同一个本机临时目录；若在准备完成、首次调用前中断，可删除准备任务返回的临时文件。
+
+`all_done` 表示上游完成后继续，即使上游失败也可能继续；当它是成功的叶任务时，整个 DAG 的结果可能掩盖上游失败，实际工作流应按需要另行处理失败。
 
 并行分发示例展示的是依赖关系；是否同时执行还取决于调度并发。easyflow 新状态库的任务并发上限默认为 1，需要时可用 `web --parallelism 2` 调整；该设置会持久化到状态库。
 

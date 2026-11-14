@@ -35,3 +35,5 @@
 - 2026-11-10 04:36 Asia/Shanghai：[合并 easyflow 使用教程与 Skill 结果](PLAN-20261110-004-model-unknown-consolidate-usage-skill-OUTCOME.md)，教程已迁移并去重；Skill、示例及独立调度器验证通过。
 - 2026-11-15 01:30 Asia/Shanghai：[六项 Review 缺陷修复计划](PLAN-20261115-001-model-unknown-review-six-fixes.md)，进行中；覆盖状态恢复、调度、特殊 ID、日志路径、回补及重试。
 - 2026-11-15 01:33 Asia/Shanghai：[六项 Review 缺陷修复结果](PLAN-20261115-001-model-unknown-review-six-fixes-OUTCOME.md)，已完成；186 项后端测试、5 项前端测试和构建通过，默认 Ruff 无新增诊断，修改尚未提交。
+- 2026-11-15 01:53 Asia/Shanghai：[代表性示例优化计划](PLAN-20261115-002-model-unknown-representative-examples.md)，进行中；合并项目标签示例，补强重试恢复和 Bash 参数模板，保持独立运行。
+- 2026-11-15 02:05 Asia/Shanghai：[代表性示例优化结果](PLAN-20261115-002-model-unknown-representative-examples-OUTCOME.md)，已实施；12 个独立示例、16 次 CLI 验证和 187 项后端测试通过，默认 Ruff 无新增诊断；Airflow 隔离安装因网络超时未完成，改动尚未提交。

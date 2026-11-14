@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +16,8 @@ from types import SimpleNamespace
 import pytest
 
 from easyflow._internal.dag_parser import discover_dag_sources, load_dag_from_file
+from easyflow._internal.persistent_runner import PersistentDagRunner
+from easyflow._internal.state_store import SQLiteStateStore
 from easyflow.sdk.context import set_current_context
 from easyflow.sdk.states import TaskInstanceState
 
@@ -30,18 +33,6 @@ CASES = [
         {"count": 3, "total": 55},
     ),
     (
-        "003_basic_project_quant.py",
-        "example_project_quant",
-        "preview_prices",
-        "量化行情示例",
-    ),
-    (
-        "004_basic_project_analytics.py",
-        "example_project_analytics",
-        "preview_report",
-        "分析日报示例",
-    ),
-    (
         "101_schedule_daily.py",
         "example_daily_schedule",
         "show_logical_date",
@@ -51,7 +42,7 @@ CASES = [
     ("103_schedule_once.py", "example_run_once", "initialize", "一次性初始化完成"),
     ("201_dependency_fanout.py", "example_fanout_fanin", "east", "east"),
     ("202_dependency_trigger_rule.py", "example_trigger_rule", "after_completion", None),
-    ("301_operator_bash.py", "example_bash_operator", "report", "ready"),
+    ("301_operator_bash.py", "example_bash_operator", "report", "BTC 2026-07-03"),
     ("302_operator_python.py", "example_python_operator", "report", 42),
     (
         "401_runtime_params.py",
@@ -59,7 +50,7 @@ CASES = [
         "summarize",
         {"symbol": "BTC", "quantity": 3},
     ),
-    ("402_runtime_retry.py", "example_retry", "call_service", "模拟服务调用成功"),
+    ("402_runtime_retry.py", "example_retry", "call_service", "模拟服务重试后成功"),
 ]
 
 
@@ -87,11 +78,15 @@ def test_example_names_and_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
         "quant_daily_prices",
     }
     assert len(result.sources) == len(files)
+    tags = {source.dag_id: source.dag.tags for source in result.sources}
+    assert "project:analytics" in tags["example_taskflow_etl"]
+    assert "project:quant" in tags["quant_daily_prices"]
 
 
 @pytest.mark.parametrize(("filename", "dag_id", "task_id", "expected"), CASES)
 def test_example_runs(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     filename: str,
     dag_id: str,
     task_id: str,
@@ -102,7 +97,9 @@ def test_example_runs(
         Path("/bin/bash").is_file() or shutil.which("bash")
     ):
         pytest.skip("BashOperator 示例需要 Bash")
-    dag = load_dag_from_file(EXAMPLES / filename, dag_id)
+    copied = tmp_path / filename
+    shutil.copyfile(EXAMPLES / filename, copied)
+    dag = load_dag_from_file(copied, dag_id)
     result = dag.test(LOGICAL_DATE, run_conf={"symbol": "BTC", "quantity": 3})
     assert result.success
     assert result.task_results[task_id] == expected
@@ -114,6 +111,26 @@ def test_example_runs(
         }
     if dag_id == "example_fanout_fanin":
         assert dag.get_task("finish").upstream_task_ids == {"east", "west"}
+    if dag_id == "example_retry":
+        assert result.try_numbers["call_service"] == 2
+        assert not Path(result.task_results["prepare_request"]).exists()
+
+
+def test_bash_example_passes_shell_characters_as_data(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("EASYFLOW_EXAMPLE_ENGINE", raising=False)
+    if not (Path("/bin/bash").is_file() or shutil.which("bash")):
+        pytest.skip("BashOperator 示例需要 Bash")
+    sentinel = tmp_path / "unexpected-command"
+    symbol = f'BTC "$(touch {sentinel})" `touch {sentinel}`; *'
+    dag = load_dag_from_file(EXAMPLES / "301_operator_bash.py", "example_bash_operator")
+
+    result = dag.test(LOGICAL_DATE, run_conf={"symbol": symbol})
+
+    assert result.success
+    assert result.task_results["report"] == f"{symbol} 2026-07-03"
+    assert not sentinel.exists()
 
 
 def test_trigger_rule_example_does_not_require_bash(
@@ -164,6 +181,45 @@ def test_retry_example_retries_failures(monkeypatch: pytest.MonkeyPatch) -> None
     result = dag.test(LOGICAL_DATE, run_conf={"fail": True})
     assert result.task_states["call_service"] == TaskInstanceState.FAILED
     assert result.try_numbers["call_service"] == 3
+    assert not result.success
+    assert not Path(result.task_results["prepare_request"]).exists()
+
+
+@pytest.mark.parametrize(
+    ("fail", "expected_state", "expected_attempts"),
+    [(False, "success", 2), (True, "failed", 3)],
+)
+def test_retry_example_recovers_across_task_processes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fail: bool,
+    expected_state: str,
+    expected_attempts: int,
+) -> None:
+    monkeypatch.setenv("EASYFLOW_EXAMPLE_ENGINE", "easyflow")
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    dag_file = tmp_path / "402_runtime_retry.py"
+    shutil.copyfile(EXAMPLES / dag_file.name, dag_file)
+    dag = load_dag_from_file(dag_file, "example_retry")
+    store = SQLiteStateStore(f"sqlite:///{tmp_path / 'state.sqlite'}")
+    runner = PersistentDagRunner(store, log_root=tmp_path / "logs")
+    run_id = runner.create_manual_run(
+        dag, file_path=dag_file, logical_date=LOGICAL_DATE, conf={"fail": fail}
+    )
+
+    result = runner.run_existing(dag, run_id=run_id, file_path=dag_file, executor="local")
+
+    assert result.state.value == expected_state
+    with sqlite3.connect(store.path) as connection:
+        attempts = connection.execute(
+            "SELECT try_number FROM task_try "
+            "WHERE dag_id = ? AND run_id = ? AND task_id = ? ORDER BY try_number",
+            (dag.dag_id, run_id, "call_service"),
+        ).fetchall()
+    assert [attempt[0] for attempt in attempts] == list(range(1, expected_attempts + 1))
+    marker = Path(store.pull_xcom(dag.dag_id, run_id, "prepare_request", "return_value"))
+    assert marker.parent == tmp_path
+    assert not marker.exists()
 
 
 def test_daily_example_without_logical_date(monkeypatch: pytest.MonkeyPatch) -> None:

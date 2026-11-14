@@ -23,7 +23,7 @@ uv run easyflow web --dags-folder examples
 
 ## 按项目查找工作流
 
-在 DAG 的 `tags` 中添加一个 `project:<名称>` 标签表示项目，其他标签用于横向分类。例如 `tags=["project:quant", "daily", "prices"]` 会归入 `quant` 项目，同时带有 `daily` 和 `prices` 标签。工作流 ID 仍在整个实例内唯一，项目只用于组织和筛选，不隔离数据或权限。未设置项目显示“未分组”；项目标签为空或指定多个不同项目时显示“项目异常”。[项目示例](examples/003_basic_project_quant.py)和[分析示例](examples/004_basic_project_analytics.py)仅支持手动触发，不写业务文件。
+在 DAG 的 `tags` 中添加一个 `project:<名称>` 标签表示项目，其他标签用于横向分类。例如 `tags=["project:quant", "daily", "prices"]` 会归入 `quant` 项目，同时带有 `daily` 和 `prices` 标签。工作流 ID 仍在整个实例内唯一，项目只用于组织和筛选，不隔离数据或权限。未设置项目显示“未分组”；项目标签为空或指定多个不同项目时显示“项目异常”。[订单 ETL 示例](examples/002_basic_taskflow_etl.py)属于 `analytics` 项目，仅手动触发；[行情分区示例](examples/501_quant_daily_prices.py)属于 `quant` 项目，支持每日调度并写入本地文件。
 
 工作流列表和运行历史将关键词搜索与项目、标签、状态过滤分开，二者可以组合使用。搜索自动生效；多个关键词用空格分隔，必须全部匹配。工作流搜索覆盖工作流 ID、描述、项目、标签和当前定义中的任务 ID；运行历史还覆盖运行 ID 和该次运行实际保存的任务 ID。历史搜索中的描述、项目和标签来自工作流当前定义，已移除工作流仍可按已保存的运行和任务 ID 搜索。
 

@@ -18,6 +18,7 @@ with DAG(
     start_date=datetime(2026, 11, 8, 8, tzinfo=timezone.utc),
     catchup=False,
     params={"symbol": "DEMO", "data_root": "./data/prices"},
+    tags=["project:quant", "daily", "prices"],
     max_active_runs=1,
     max_active_tasks=2,
 ) as dag:

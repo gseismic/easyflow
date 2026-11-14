@@ -14,7 +14,7 @@ else:
     schedule=None,
     start_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
     catchup=False,
-    tags=["example", "basic"],
+    tags=["project:analytics", "example", "basic", "orders"],
 )
 def taskflow_etl():
     @task

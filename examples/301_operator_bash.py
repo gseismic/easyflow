@@ -1,4 +1,8 @@
-"""BashOperator：执行 shell，并把最后一行输出传给 Python 任务。"""
+"""按品种和运行日期执行 shell，再把最后一行输出传给 Python 任务。
+
+运行：uv run easyflow dags test example_bash_operator --file examples/301_operator_bash.py
+可用 --conf-json '{"symbol":"BTC"}' 覆盖品种；输出包含品种和逻辑日期。
+"""
 
 import os
 from datetime import datetime, timezone
@@ -16,11 +20,17 @@ with DAG(
     schedule=None,
     start_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
     catchup=False,
+    params={"symbol": "DEMO"},
     tags=["example", "operator"],
 ) as dag:
     shell = BashOperator(
         task_id="run_shell",
-        bash_command="printf 'checking\nready\n'",
+        bash_command='printf \'checking\\n%s %s\\n\' "$SYMBOL" "$RUN_DATE"',
+        # 模板值通过环境变量传入，避免把参数拼进 shell 源码。
+        env={
+            "SYMBOL": "{{ params.symbol }}",
+            "RUN_DATE": "{{ ds | default('未提供', true) }}",
+        },
     )
 
     @task
