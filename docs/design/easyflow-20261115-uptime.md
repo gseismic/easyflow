@@ -34,6 +34,8 @@
 
 新增 `GET /api/workflows/uptime`，使用现有登录保护，viewer 可读。参数为重复的 `dag_id`（1–100 个）、`start_at`、`end_at`（必须带时区）。固定间隔 30 分钟，范围为正的半小时倍数且最多 25 小时；去重工作流 ID，不依赖 DAG 文件是否仍存在。返回统一 UTC 起止时间、服务器 `as_of`、`slot_minutes: 30`，以及每个工作流的格子数组，字段为 `start_at/end_at/state/run_count/failed_run_count`。固定只返回格子摘要，不传出错误堆栈或无限制运行列表。
 
+2026-11-15 的日/周/月扩展保留以上半小时默认行为，新增 `granularity=day` 和 IANA `timezone`，支持最多 31 个本地自然日汇总。周、月视图每格一天，支持查看当天明细；详细边界和兼容性见 `docs/design/easyflow-20261115-uptime-periods.md`。
+
 每格还包含 `waiting_run_count` 和一个示例运行的 `sample_run_id`。出错格子优先携带对应的 `sample_task_id/sample_try_number`；入口通过查询参数定位到失败任务的指定尝试日志，任务当前状态仍展示最近结果，避免重试恢复后误看最新成功日志。同格涉及多个运行时，明确显示运行数，其他运行可继续在工作流历史中查看。
 
 方案比较：前端从最近 100 次运行推图实现短，但会漏高频历史且丢失成功重试前的错误；按工作流逐一请求增加列表开销。选择批量查询与数据库按格聚合，返回规模为工作流数乘格子数。

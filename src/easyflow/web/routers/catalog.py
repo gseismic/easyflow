@@ -69,10 +69,14 @@ def uptime(
     dag_id: Annotated[list[str], Query(min_length=1, max_length=100)],
     start_at: datetime,
     end_at: datetime,
+    granularity: Literal["half_hour", "day"] = "half_hour",
+    timezone_name: Annotated[str, Query(alias="timezone", max_length=100)] = "UTC",
 ):
     return workflow_uptime(
         request.app.state.service.store.path,
         dag_ids=dag_id,
         start_at=start_at,
         end_at=end_at,
+        granularity=granularity,
+        timezone_name=timezone_name,
     )

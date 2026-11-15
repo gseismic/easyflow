@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from bisect import bisect_right
+from datetime import UTC, datetime, time, timedelta
+from itertools import pairwise
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 SLOT_SECONDS = 30 * 60
 
@@ -19,6 +22,8 @@ def workflow_uptime(
     dag_ids: list[str],
     start_at: datetime,
     end_at: datetime,
+    granularity: str = "half_hour",
+    timezone_name: str = "UTC",
     now: datetime | None = None,
 ) -> dict:
     """按实际执行区间和失败事件聚合；返回规模仅与工作流数和格子数有关。"""
@@ -29,17 +34,37 @@ def workflow_uptime(
     start = start_at.astimezone(UTC)
     end = end_at.astimezone(UTC)
     seconds = (end - start).total_seconds()
-    if seconds <= 0 or seconds > 25 * 3600 or seconds % SLOT_SECONDS:
-        raise ValueError("uptime 范围必须是正的半小时倍数，且不超过 25 小时。")
+    if granularity == "half_hour":
+        if seconds <= 0 or seconds > 25 * 3600 or seconds % SLOT_SECONDS:
+            raise ValueError("uptime 范围必须是正的半小时倍数，且不超过 25 小时。")
+        boundaries = [
+            (start + timedelta(seconds=index * SLOT_SECONDS)).timestamp()
+            for index in range(int(seconds // SLOT_SECONDS) + 1)
+        ]
+    elif granularity == "day":
+        try:
+            zone = ZoneInfo(timezone_name)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("uptime 时区无效，请使用有效的 IANA 时区。") from exc
+        local_start, local_end = start.astimezone(zone), end.astimezone(zone)
+        days = (local_end.date() - local_start.date()).days
+        if local_start.time() != time.min or local_end.time() != time.min:
+            raise ValueError("按天汇总的起止时间必须是指定时区的午夜。")
+        if not 1 <= days <= 31:
+            raise ValueError("按天汇总的范围必须为 1 到 31 个本地日。")
+        boundaries = [
+            (local_start + timedelta(days=index)).astimezone(UTC).timestamp()
+            for index in range(days + 1)
+        ]
+        if any(left >= right for left, right in pairwise(boundaries)):
+            raise ValueError("所选范围包含不可表示的本地日期，请调整日期。")
+    else:
+        raise ValueError("uptime 粒度必须为 half_hour 或 day。")
     current = now or datetime.now(UTC)
     if current.tzinfo is None:
         raise ValueError("now 必须带时区。")
     as_of = current.timestamp()
     ids = list(dict.fromkeys(dag_ids))
-    boundaries = [
-        (start + timedelta(seconds=index * SLOT_SECONDS)).timestamp()
-        for index in range(int(seconds // SLOT_SECONDS) + 1)
-    ]
     with sqlite3.connect(database) as connection:
         connection.row_factory = sqlite3.Row
         # 使用 Python 时间转换保留微秒精度，避免 SQLite 时间函数在整点附近舍入。
@@ -55,7 +80,7 @@ def workflow_uptime(
             "INSERT INTO uptime_slots VALUES (?, ?, ?)",
             ((i, boundaries[i], boundaries[i + 1]) for i in range(len(boundaries) - 1)),
         )
-        # 两次聚合共享读取快照；不把任务数量和运行数量混为一谈。
+        # 各项聚合共享读取快照；不把任务数量和运行数量混为一谈。
         activity = connection.execute(
             """
             WITH intervals AS (
@@ -157,7 +182,7 @@ def workflow_uptime(
             sample_run_id=row["sample_run_id"],
         )
     if start.timestamp() <= as_of < end.timestamp():
-        position = int((as_of - start.timestamp()) // SLOT_SECONDS)
+        position = bisect_right(boundaries, as_of) - 1
         for row in waiting:
             slot = workflows[row["dag_id"]][position]
             slot["waiting_run_count"] = row["waiting_run_count"]
@@ -176,6 +201,8 @@ def workflow_uptime(
         "start_at": start.isoformat(),
         "end_at": end.isoformat(),
         "as_of": current.astimezone(UTC).isoformat(),
-        "slot_minutes": 30,
+        "granularity": granularity,
+        "timezone": timezone_name if granularity == "day" else "UTC",
+        "slot_minutes": 30 if granularity == "half_hour" else None,
         "workflows": workflows,
     }

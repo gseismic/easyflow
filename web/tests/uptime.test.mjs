@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { dayBounds, localDay, shiftDay, slotDescription, uptimeRunHref, uptimeUrl } from "../src/uptime.js";
+import { dayBounds, localDay, periodBounds, periodRange, shiftDay, shiftPeriod, slotDescription, uptimeRunHref, uptimeUrl } from "../src/uptime.js";
 
 test("本地日期转为 UTC 范围，跨月切换保留特殊工作流 ID", () => {
   const original = process.env.TZ;
@@ -55,4 +55,55 @@ test("红格链接保留具体失败任务与尝试，重试成功后仍可查�
   assert.equal(params.get("run_id"), slot.sample_run_id);
   assert.equal(params.get("task_id"), slot.sample_task_id);
   assert.equal(params.get("attempt"), "2");
+});
+
+test("周从周一开始，月份包含完整日期，默认仍查询半小时明细", () => {
+  const original = process.env.TZ;
+  process.env.TZ = "Asia/Shanghai";
+  try {
+    const week = periodBounds("2026-11-15", "week");
+    assert.equal(localDay(week.start), "2026-11-09");
+    assert.equal(localDay(week.end), "2026-11-16");
+    assert.equal(periodRange("2026-11-15", "week"), "2026-11-09 — 2026-11-15");
+    for (const [month, days] of [["2026-02", 28], ["2024-02", 29], ["2026-04", 30], ["2026-01", 31]]) {
+      const bounds = periodBounds(`${month}-15`, "month");
+      assert.equal((bounds.end - bounds.start) / 86400000, days);
+      assert.equal(periodRange(`${month}-15`, "month"), month);
+    }
+    const url = new URL(uptimeUrl(["demo"], "2026-11-15", "week"), "http://localhost");
+    assert.equal(url.searchParams.get("granularity"), "day");
+    assert.equal(url.searchParams.get("timezone"), "Asia/Shanghai");
+    assert.equal(url.searchParams.get("start_at"), "2026-11-08T16:00:00.000Z");
+    assert.equal(url.searchParams.get("end_at"), "2026-11-15T16:00:00.000Z");
+    assert.equal(new URL(uptimeUrl(["demo"], "2026-11-15"), "http://localhost").searchParams.has("granularity"), false);
+    assert.equal(periodBounds("2026-11-15", "invalid"), null);
+  } finally {
+    if (original === undefined) delete process.env.TZ;
+    else process.env.TZ = original;
+  }
+});
+
+test("前后周期处理跨年、短月份和周偏移", () => {
+  assert.equal(shiftPeriod("2026-01-31", "month", 1), "2026-02-28");
+  assert.equal(shiftPeriod("2024-01-31", "month", 1), "2024-02-29");
+  assert.equal(shiftPeriod("2026-03-31", "month", -1), "2026-02-28");
+  assert.equal(shiftPeriod("2026-12-31", "month", 1), "2027-01-31");
+  assert.equal(shiftPeriod("2026-01-01", "week", -1), "2025-12-25");
+  assert.equal(shiftPeriod("2026-03-01", "day", -1), "2026-02-28");
+});
+
+test("跨夏令时的周按本地午夜取界，日汇总说明没有伪造半小时时段", () => {
+  const original = process.env.TZ;
+  process.env.TZ = "America/New_York";
+  try {
+    const bounds = periodBounds("2026-03-08", "week");
+    assert.equal((bounds.end - bounds.start) / 3600000, 167);
+    const description = slotDescription({ start_at: "2026-03-08T05:00:00Z", end_at: "2026-03-09T04:00:00Z", state: "failed", run_count: 2, failed_run_count: 1 }, "week");
+    assert.match(description, /2026/);
+    assert.match(description, /2 次运行有执行/);
+    assert.doesNotMatch(description, /00:00/);
+  } finally {
+    if (original === undefined) delete process.env.TZ;
+    else process.env.TZ = original;
+  }
 });

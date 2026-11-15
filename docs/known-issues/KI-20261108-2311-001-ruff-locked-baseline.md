@@ -63,3 +63,10 @@
 - 更新模型：Codex（基于 GPT-6；完整模型 ID 未提供）。状态保持未解决；本事件仅补充上一条验证记录对应的实际代码版本。
 - 已验证改动提交为 `6ac0f571d33a4de9e6c8350530926b97e1047fe7`；194 项既有诊断且无新增的结果不变。用户获知此验证状态后明确要求提交。未推送。
 - 依据：Git 提交记录，以及 `docs/plans/PLAN-20261115-005-model-unknown-uptime-queued-at-OUTCOME.md` 的提交与服务复核事件。
+
+## 2026-11-15 15:25 Asia/Shanghai：日、周、月视图验证
+
+- 更新模型：Codex（基于 GPT-6；完整模型 ID 未提供）。状态保持未解决。
+- 版本为 `WORKTREE`，基准 `c99e5da6b6e925db21fced9dbf700b2c06d46edd`；本次 Python 修改为 `src/easyflow/web/uptime.py`、`src/easyflow/web/routers/catalog.py`、`tests/test_web_uptime.py`，创建本事件时尚未提交。
+- 默认全量 Ruff 仍为 194 项既有诊断，与之前基线数量一致；本次修改的 Python 文件默认检查全部通过，核心规则检查通过。本次未改变其他 Python 文件或 lint 策略，不能称默认全量检查通过。
+- 259 项后端测试、12 项前端测试、构建及日/周/月、DST、窄屏浏览器验证通过。关联结果为 `docs/plans/PLAN-20261115-007-model-unknown-uptime-periods-OUTCOME.md`。

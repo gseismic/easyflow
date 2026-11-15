@@ -44,7 +44,9 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
     matchingTotal === null ? "统计中" : `匹配 ${matchingTotal} 个`;
   const dags = workflows.data?.dags || [];
   const [day, setDay] = useState(() => localDay());
-  const uptime = useUptime(dags.map((dag) => dag.dag_id), day);
+  const [period, setPeriod] = useState("day");
+  const uptime = useUptime(dags.map((dag) => dag.dag_id), day, period);
+  const openDay = (value) => { setDay(value); setPeriod("day"); };
   const summary = workflows.data?.summary;
   const changeView = (patch) =>
     setView((current) => ({ ...current, ...patch, cursors: [null], page: 0 }));
@@ -149,7 +151,7 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
         {(overview.data?.loading || workflows.data?.loading) && (
           <div className="discovery-loading" role="status">正在发现工作流，项目和结果可能尚未完整。</div>
         )}
-        {dags.length > 0 && <UptimeControls day={day} onChange={setDay} />}
+        {dags.length > 0 && <UptimeControls day={day} onChange={setDay} period={period} onPeriodChange={setPeriod} />}
         {dags.length > 0 && uptime.error && (
           <div className="notice error uptime-error" role="alert">
             运行时段更新失败{uptime.data ? "，当前显示旧数据" : ""}：{uptime.error}{" "}
@@ -210,7 +212,7 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
                     <td><a className="row-arrow" href={`#/dags/${part(dag.dag_id)}`} aria-label={`查看 ${dag.dag_id}`}>→</a></td>
                   </tr>
                   <tr className="workflow-uptime-row"><td colSpan={6}>
-                    <UptimeStrip key={day} dagId={dag.dag_id} slots={uptime.data?.workflows?.[dag.dag_id]} error={uptime.error} />
+                    <UptimeStrip key={`${period}:${day}`} dagId={dag.dag_id} slots={uptime.data?.workflows?.[dag.dag_id]} error={uptime.error} period={period} onOpenDay={openDay} />
                   </td></tr>
                   </Fragment>
                 ))}
