@@ -1,6 +1,6 @@
 # easyflow 会话交接
 
-最新补充见第 11 节（2026-11-16 01:54 Asia/Shanghai）：本轮已将默认 uptime 改为最近小时并加入周/月原位展开日图；下文前 10 节保留历史交接，默认日视图等旧描述已由第 11 节更新。
+最新交接见第 12 节（2026-11-16 05:41 Asia/Shanghai）：用户已认可现有设计方向并授权实施代码微调，随后要求先交接，当前目标为 paused。已保存 19 张原图和 16 张 A2 设计稿，代码尚未修改；恢复后直接实施，不继续补图。第 11 节记录最近小时与周/月展开功能；下文前 10 节为历史信息，旧默认日视图、无 TODOS、A1 未实现等描述不可代替当前代码和最新交接。
 
 - 创建时间：2026-11-15 16:43 Asia/Shanghai。
 - 创建者：Codex（基于 GPT-6；环境未提供可核实的完整模型 ID，标记为 `model-unknown`）。
@@ -238,3 +238,79 @@ uv run easyflow web \
 本轮没有待继续实现的授权事项，也没有新增长期问题；既有问题和后续事项仍以 [KNOWN-ISSUES](KNOWN-ISSUES.md)、[TODOS](TODOS.md) 为准。邮件告警尚属后续范围。
 
 关联文档：[计划](plans/PLAN-20261116-001-model-unknown-rolling-uptime.md)、[结果](plans/PLAN-20261116-001-model-unknown-rolling-uptime-OUTCOME.md)、[设计](design/easyflow-20261116-rolling-uptime.md)。本轮本地提交，不推送。
+
+## 12. 2026-11-16 05:41 界面微调设计与代码实施交接
+
+- 更新者：Codex（基于 GPT-6；环境未提供完整模型 ID，使用 `model-unknown`）。
+- 当前分支：`main`；固定 HEAD：`9e3f1cd5b4803d0e02a5bc0c269c62d611a7544b`。本节的设计图片和文档是 WORKTREE，未固定为提交。
+- 当前要求：**先写交接文档，暂停代码实施。** 目标“差不多可以实施代码微调了”当前状态为 `paused`，没有标记完成。
+- 本会话没有修改应用源码、配置、静态资源、测试或 `GOAL.md`，没有新 commit，也没有 push。
+
+### 12.1 用户已明确的方向
+
+用户先调用其提供的 `ui-redesign-zh`，要求“为我微调界面”；随后明确“不用所有的都生成，我觉得可以了”，再明确“差不多可以实施代码微调了”，最后要求先交接。这些授权持续有效。恢复后应实施代码微调，不用重新确认是否允许实施，也不要继续补齐图片或开启下一轮图片迭代。
+
+微调保留当前布局、左侧树形导航、顶部栏、详情标签和操作路径，延续浅绿、白色、深绿文字风格。重点是间距、字体层级、控件一致性、按钮主次、卡片边框和阴影，以及日夜主题和窄屏细节。没有授权增加功能或重组页面。搜索与基础筛选仍常驻；最近 24 小时、日周月、当天展开和历史错误语义沿用当前实现。
+
+### 12.2 已保存成果及复核状态
+
+- [本次设计说明](design/easyflow-20261116-ui-polish.md)：真实截图中的问题、页面范围、配色和微调方向。
+- [图片设计计划](plans/PLAN-20261116-002-model-unknown-ui-polish.md) 与 [结果](plans/PLAN-20261116-002-model-unknown-ui-polish-OUTCOME.md)：原计划已按用户停止补图的指令收口，不能描述为全部完成。
+- [原始截图记录](ui-design/source/20261116/notes.md)：`docs/ui-design/source/20261116/` 共 19 张原图；桌面视口 1440×1000，手机 390×844。长页采用完整页面截图，弹窗和抽屉为视口截图，已逐张打开检查。
+- [A2 状态及逐页索引](ui-design/A2/notes.md)：`docs/ui-design/A2/` 保存 01–16 共 16 张 PNG，以及 01–19 的逐页 `*-prompt.txt`。17 黑夜概览、18 手机概览、19 手机抽屉只有提示词，没有归档 PNG；不再补生成。
+- 旧 `docs/ui-design/A1/` 保留，没有覆盖。A2 采用内置 imagegen，以实际截图为输入，后续页面使用 A2 概览作样式参考。生成图的画布尺寸存在差异，不等同于 CSS 精确尺寸。
+
+**已用图片查看工具重新打开的 A2 稿件只有 7 张：02 列表、03 概览、04 任务、05 日志、06 工作流历史、07 调度详情、08 源码。** 01 登录与 09–16 共 9 张已保存，但中断前尚未完成保存后的逐图复核。不要宣称 16 张全部通过复核。
+
+已发现两处设计稿偏差，后续实施直接按真实数据和统一样式处理，无须为它们再生成图片：
+
+1. `docs/ui-design/A2/03-overview.png` 的 22:00 刻度误写为 `11/16 22:00`，正确应为 `11/15 22:00`；真实截图 `docs/ui-design/source/20261116/03-overview.png` 正确。不能把图片误字写入时间计算逻辑。
+2. `docs/ui-design/A2/06-workflow-history.png` 的“触发运行”仍为白底，未与其他已检查详情稿的深绿主按钮统一。实现时统一主操作，保留刷新和暂停为次级操作。
+
+A2 是未完成的图片轮次，因用户认为已有成果足够而停止，不是“无问题”的定稿。未检查稿件中的长 ID、代码、日志、中文和日期，应在真正使用时结合原图核对。用户已接受视觉方向，不代表逐字接受图像生成误差。
+
+### 12.3 建议的实施起点与约束
+
+尚未建立代码实施计划，也没有开始编辑 CSS/JSX。恢复后先按项目规范创建当天新编号的实施计划，不把编号 002 图片计划伪装成已实施代码的计划；使用 `feature-dev-workflow`，沿用既有 React、FastAPI、pnpm、uv，不新增依赖。
+
+可优先阅读这些已核实入口，行号对应上述 HEAD：
+
+| 路径与行号 | 本次相关性 |
+| --- | --- |
+| `web/src/main.jsx:3` | 样式加载顺序为 index.css → workspace.css → appearance.css；调整覆盖关系前先确认来源。 |
+| `web/src/index.css:476` | 共享按钮；primary 阴影在 `web/src/index.css:489`，卡片在 `web/src/index.css:544`，登录样式在 `web/src/index.css:1104`。 |
+| `web/src/workspace.css:1` | 工作台导航、页头及紧凑控件；当天小格的 20px 高度在 `web/src/workspace.css:167`，窄屏规则从 `web/src/workspace.css:194` 开始，编辑前重读。 |
+| `web/src/appearance.css:1`、`web/src/appearance.css:38` | 浅色/深色语义变量；设置控件也在此文件。 |
+| `web/src/pages/DagDetail.jsx:149` | 当前“＋ 触发运行”按钮仍用 `button subtle`，可按稿统一为 primary；只调整呈现，不改触发逻辑与权限。 |
+| `web/vite.config.js:13` | 构建输出到已跟踪的 `src/easyflow/web/static`，`emptyOutDir: true`。构建前检查已有资源，避免无关删除；代理在第 14 行，当前指向 8790。 |
+
+视觉参数参考：浅色底 `#F5F7F5`、白面板、边框 `#DFE8E2`、主文 `#183B2D`、辅文 `#53695E`、主色 `#216B4F`；卡片约 12px 圆角、控件约 8px，8px 间距体系。深色以 `#101914` 背景、`#19251F` 面板、`#344A3D` 边框、`#E4ECE6` 主文为参考，减少整体绿雾。正文目标约 14px、辅助字约 12px；保留明显焦点状态及手机触摸面积，不能机械把全部 44px 控件缩小。列表每条工作流适当收紧留白，保留原表格字段和下方独立时间条，不改成新布局。
+
+后续应运行 `web/` 的 `pnpm test`、`pnpm build`，并在真实隔离页面验证列表/详情/日志/设置、红格原位失败、周月当天展开、登录/弹窗、日夜及 390/1440px；必要时补 320/768px。已有 `web/checks/appearance.js`、`rolling-uptime.js`、`navigation-stability.js`、`monitoring-ui.js`、`review-fixes.js` 可参考。旧脚本中可能包含像素断言，调整视觉后要按有意义的行为边界复核，不能为通过检查恢复旧间距。本轮没有运行这些代码测试，历史通过结果不能冒充新微调验证。
+
+### 12.4 当前环境与工作区
+
+本轮开始时工作区干净。交接前工作区为：
+
+```text
+ M docs/HANDOFF.md
+ M docs/plans/INDEX.md
+?? .playwright-cli/
+?? docs/design/easyflow-20261116-ui-polish.md
+?? docs/plans/PLAN-20261116-002-model-unknown-ui-polish.md
+?? docs/plans/PLAN-20261116-002-model-unknown-ui-polish-OUTCOME.md
+?? docs/ui-design/A2/
+?? docs/ui-design/source/
+```
+
+`.playwright-cli/` 是本轮浏览器命令产生的快照/日志，不作为交付源码；不要随手 `git add .`。A2、原图、提示词和新增记录属于用户成果，应保留。没有应用代码改动，没有需回滚的代码。
+
+隔离演示 Web 已恢复：`http://127.0.0.1:8791`，本轮读取时监听进程 PID `25780`，父 uv PID `25779`；均为快照，使用前重新核实。保持 `--no-scheduler`，未触发/暂停/清理/回补业务。数据、日志及 `handoff-access.json` 仍在第 6 节的隔离目录。新截图会话 `polish` 已关闭；原 `easyflow-uptime` 会话仍列为 open，可自行新建独立上下文，避免改变已有浏览器偏好。长会话名曾超过 macOS Unix socket 长度而启动失败，短名称正常。
+
+本轮页面截图等待字体/图片加载；主体浏览 pageerror 为 0、业务写请求为 0。首开未登录时出现的 401 属登录前状态，不是已确认应用缺陷。没有在仓库写入口令；临时认证状态文件 `/tmp/easyflow-ui-polish-auth.json` 为本机临时资料，旧会话可能已失效，不加入版本管理。
+
+曾因磁盘不足保存提示词失败；用户随后明确“我已经重新分配了空间”，保存已恢复。没有删除其他任务缓存、浏览器或业务目录。由于用户中断，旧函数执行单元已不可查询，最后 3 张 PNG 未归档；不重新发起生成。
+
+既有问题和后续工作见 [KNOWN-ISSUES](KNOWN-ISSUES.md)、[TODOS](TODOS.md)，本轮未发现需要新增长期条目的应用问题。恢复后的顺序是：读 GOAL/AGENTS 和本节 → 检查 Git → 建立代码微调计划 → 基于已接受方向实施和验证。当前先完成交接并停止实施。
+
+交接收尾检查：`git diff --check` 通过；7 份相关 Markdown 的 101 个本地链接全部存在；已确认 19 张原图、16 张生成图、19 份提示词；`web/`、`src/`、`tests/`、`GOAL.md` 没有本轮差异。未运行应用测试或构建，因为本轮没有代码修改。

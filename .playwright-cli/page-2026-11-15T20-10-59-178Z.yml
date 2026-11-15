@@ -1,0 +1,23 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - text: e
+        - generic [ref=e7]: ·
+      - strong [ref=e8]: easyflow
+    - generic [ref=e9]: WORKFLOW CONTROL ／ 工作流管理
+    - heading "欢迎回来" [level=1] [ref=e10]
+    - paragraph [ref=e11]: 登录后查看调度状态与任务运行情况。
+    - generic [ref=e12]:
+      - generic [ref=e13]:
+        - text: 用户名
+        - textbox "用户名" [active] [ref=e14]
+      - generic [ref=e15]:
+        - text: 密码
+        - textbox "密码" [ref=e16]
+      - button "登录" [ref=e17] [cursor=pointer]
+    - generic [ref=e18]:
+      - strong [ref=e19]: 首次使用？
+      - generic [ref=e20]: 在终端创建管理员账户，然后使用该账户登录。
+      - code [ref=e21]: uv run easyflow users create admin --role admin
+  - generic [ref=e22]: EASYFLOW ／ 简单而清晰的工作流

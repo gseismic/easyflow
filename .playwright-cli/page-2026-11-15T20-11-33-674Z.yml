@@ -1,0 +1,493 @@
+- generic [ref=e2]:
+  - banner [ref=e23]:
+    - link "easyflow 首页" [ref=e24] [cursor=pointer]:
+      - /url: "#/"
+      - generic [ref=e25]:
+        - text: e
+        - generic [ref=e26]: ·
+      - strong [ref=e27]: easyflow
+    - generic "未发现有效的调度器租约。" [ref=e28]: 调度器离线
+    - generic [ref=e30]:
+      - generic "uptime-check" [ref=e31]: uptime-check · 管理员
+      - button "退出" [ref=e32] [cursor=pointer]
+  - generic [ref=e33]:
+    - dialog "工作流导航" [ref=e34]:
+      - navigation "主导航" [ref=e35]:
+        - link "全部工作流" [active] [ref=e36] [cursor=pointer]:
+          - /url: "#/"
+        - link "运行历史" [ref=e37] [cursor=pointer]:
+          - /url: "#/history"
+      - search "导航搜索" [ref=e38]:
+        - generic [ref=e39]:
+          - generic [ref=e40]: ⌕
+          - textbox "搜索导航工作流" [ref=e41]:
+            - /placeholder: 筛选左侧工作流或项目
+      - list "项目与工作流" [ref=e44]:
+        - listitem [ref=e45]:
+          - generic [ref=e46]:
+            - button "展开项目 未分组" [ref=e47] [cursor=pointer]:
+              - generic [ref=e48]: ›
+            - link "未分组 4" [ref=e49] [cursor=pointer]:
+              - /url: "#/?project_kind=unassigned"
+              - generic [ref=e50]: 未分组
+              - generic [ref=e51]: "4"
+      - navigation "工作台设置" [ref=e52]:
+        - link "设置" [ref=e53] [cursor=pointer]:
+          - /url: "#/settings"
+          - generic [ref=e54]: ⚙
+          - text: 设置
+    - main [ref=e56]:
+      - generic [ref=e57]:
+        - generic [ref=e58]:
+          - heading "你的工作流" [level=1] [ref=e59]
+          - status [ref=e60]: ●新运行将等待调度器启动
+        - button "↻ 刷新" [ref=e61] [cursor=pointer]:
+          - text: ↻
+          - generic [ref=e62]: 刷新
+      - region "当前搜索范围的工作流概览" [ref=e63]:
+        - generic [ref=e64]:
+          - generic [ref=e65]: 工作流
+          - strong [ref=e66]: "4"
+        - generic [ref=e67]:
+          - generic [ref=e68]: 运行中
+          - strong [ref=e69]: "1"
+        - generic [ref=e70]:
+          - generic [ref=e71]: 最近运行失败
+          - strong [ref=e72]: "0"
+      - generic [ref=e73]:
+        - generic [ref=e74]:
+          - generic [ref=e75]:
+            - heading "全部工作流" [level=2] [ref=e76]
+            - paragraph [ref=e77]: 选择工作流，查看运行和任务详情；统计不受状态筛选影响。
+          - generic [ref=e78]: 匹配 4 个
+        - region "工作流搜索与筛选" [ref=e79]:
+          - search "搜索工作流" [ref=e80]:
+            - generic [ref=e81]: 搜索
+            - generic [ref=e82]:
+              - generic [ref=e83]:
+                - generic [ref=e84]: ⌕
+                - textbox "搜索工作流" [ref=e85]:
+                  - /placeholder: 搜索工作流 ID、描述或任务 ID
+              - paragraph [ref=e86]: 也可搜索项目和标签；多个关键词用空格分开，需全部匹配。
+          - generic [ref=e87]:
+            - generic [ref=e88]: 过滤
+            - generic [ref=e89]:
+              - generic [ref=e90]:
+                - generic [ref=e91]:
+                  - generic [ref=e92]: 项目（0）
+                  - combobox "筛选项目" [ref=e93]:
+                    - option "全部项目 · 4 个工作流" [selected]
+                    - option "未分组 · 4 个工作流"
+                    - option "项目异常 · 0 个工作流"
+                - group [ref=e94]:
+                  - generic "标签 ▾" [ref=e95] [cursor=pointer]
+                - group "过滤工作流状态" [ref=e96]:
+                  - button "全部" [pressed] [ref=e97] [cursor=pointer]
+                  - button "运行中" [ref=e98] [cursor=pointer]
+                  - button "最近运行失败" [ref=e99] [cursor=pointer]
+                  - button "已暂停" [ref=e100] [cursor=pointer]
+              - status "项目数量为总数；统计时间 2026/11/16 04:11:31" [ref=e101]: 统计更新于 04:11:31
+        - generic [ref=e102]:
+          - generic [ref=e103]:
+            - generic [ref=e104]:
+              - generic [ref=e105]: 运行时段
+              - group "uptime 查看范围" [ref=e106]:
+                - button "最近视图" [pressed] [ref=e107] [cursor=pointer]: 最近
+                - button "日视图" [ref=e108] [cursor=pointer]: 日
+                - button "周视图" [ref=e109] [cursor=pointer]: 周
+                - button "月视图" [ref=e110] [cursor=pointer]: 月
+              - form "最近小时范围" [ref=e111]:
+                - generic [ref=e112]: 最近
+                - spinbutton "最近小时数" [ref=e113]: "24"
+                - generic [ref=e114]: 小时
+                - button "应用" [ref=e115] [cursor=pointer]
+                - generic [ref=e116]: 1–168 小时
+              - generic "显示时间范围" [ref=e117]: 11/15 04:11 — 11/16 04:11
+            - generic [ref=e118]: 30 分钟 / 格 · 本地时间
+            - group [ref=e119]:
+              - generic "说明" [ref=e120] [cursor=pointer]
+          - generic "运行时段图例" [ref=e121]:
+            - generic [ref=e122]: 有执行
+            - generic [ref=e124]: 执行中
+            - generic [ref=e126]: 当前等待
+            - generic [ref=e128]: 发生错误
+            - generic [ref=e130]: 无执行
+            - generic [ref=e132]: 尚未到达
+        - table [ref=e135]:
+          - rowgroup [ref=e136]:
+            - row "工作流 / 项目 / 标签 调度 下次计划 最近开始 / 入队 状态 查看详情" [ref=e137]:
+              - columnheader "工作流 / 项目 / 标签" [ref=e138]
+              - columnheader "调度" [ref=e139]
+              - columnheader "下次计划" [ref=e140]
+              - columnheader "最近开始 / 入队" [ref=e141]
+              - columnheader "状态" [ref=e142]
+              - columnheader "查看详情" [ref=e143]
+          - rowgroup [ref=e144]:
+            - row "↗ daily_sync 2 个任务 · 已启用 运行时段验收 筛选项目：未分组 筛选标签：demo 筛选标签：monitor 手动触发 手动触发 2026/11/15 08:44:52 开始时间 成功 查看 daily_sync" [ref=e145]:
+              - cell "↗ daily_sync 2 个任务 · 已启用 运行时段验收 筛选项目：未分组 筛选标签：demo 筛选标签：monitor" [ref=e146]:
+                - link "↗ daily_sync 2 个任务 · 已启用" [ref=e147] [cursor=pointer]:
+                  - /url: "#/dags/daily_sync"
+                  - generic [ref=e148]: ↗
+                  - generic [ref=e149]:
+                    - strong [ref=e150]: daily_sync
+                    - generic [ref=e151]: 2 个任务 · 已启用
+                - generic "运行时段验收" [ref=e153]
+                - generic [ref=e154]:
+                  - button "筛选项目：未分组" [ref=e155] [cursor=pointer]: 未分组
+                  - button "筛选标签：demo" [ref=e156] [cursor=pointer]: demo
+                  - button "筛选标签：monitor" [ref=e157] [cursor=pointer]: monitor
+              - cell "手动触发" [ref=e158]
+              - cell "手动触发" [ref=e159]
+              - cell "2026/11/15 08:44:52 开始时间" [ref=e160]:
+                - text: 2026/11/15 08:44:52
+                - generic [ref=e161]: 开始时间
+              - cell "成功" [ref=e162]:
+                - generic [ref=e163]: 成功
+              - cell "查看 daily_sync" [ref=e165]:
+                - link "查看 daily_sync" [ref=e166] [cursor=pointer]:
+                  - /url: "#/dags/daily_sync"
+                  - text: →
+            - row "daily_sync 的半小时运行时段 1 个时段有执行 · 1 个时段发生错误 · 点选格子查看 查看运行历史 →" [ref=e167]:
+              - cell "daily_sync 的半小时运行时段 1 个时段有执行 · 1 个时段发生错误 · 点选格子查看 查看运行历史 →" [ref=e168]:
+                - generic [ref=e169]:
+                  - group "daily_sync 的半小时运行时段" [ref=e170]:
+                    - generic [ref=e171]:
+                      - generic [ref=e172]:
+                        - button "11/15 04:11 — 11/15 04:30 · 无执行" [ref=e173] [cursor=pointer]
+                        - button "11/15 04:30 — 11/15 05:00 · 无执行" [ref=e174] [cursor=pointer]
+                        - button "11/15 05:00 — 11/15 05:30 · 无执行" [ref=e175] [cursor=pointer]
+                        - button "11/15 05:30 — 11/15 06:00 · 无执行" [ref=e176] [cursor=pointer]
+                        - button "11/15 06:00 — 11/15 06:30 · 无执行" [ref=e177] [cursor=pointer]
+                        - button "11/15 06:30 — 11/15 07:00 · 无执行" [ref=e178] [cursor=pointer]
+                        - button "11/15 07:00 — 11/15 07:30 · 无执行" [ref=e179] [cursor=pointer]
+                        - button "11/15 07:30 — 11/15 08:00 · 无执行" [ref=e180] [cursor=pointer]
+                        - button "11/15 08:00 — 11/15 08:30 · 无执行" [ref=e181] [cursor=pointer]
+                        - button "11/15 08:30 — 11/15 09:00 · 发生错误 · 2 次运行有执行 · 1 次运行发生错误（含重试）" [ref=e182] [cursor=pointer]:
+                          - generic [ref=e183]: "!"
+                        - button "11/15 09:00 — 11/15 09:30 · 无执行" [ref=e184] [cursor=pointer]
+                        - button "11/15 09:30 — 11/15 10:00 · 无执行" [ref=e185] [cursor=pointer]
+                        - button "11/15 10:00 — 11/15 10:30 · 无执行" [ref=e186] [cursor=pointer]
+                        - button "11/15 10:30 — 11/15 11:00 · 无执行" [ref=e187] [cursor=pointer]
+                        - button "11/15 11:00 — 11/15 11:30 · 无执行" [ref=e188] [cursor=pointer]
+                        - button "11/15 11:30 — 11/15 12:00 · 无执行" [ref=e189] [cursor=pointer]
+                        - button "11/15 12:00 — 11/15 12:30 · 无执行" [ref=e190] [cursor=pointer]
+                        - button "11/15 12:30 — 11/15 13:00 · 无执行" [ref=e191] [cursor=pointer]
+                        - button "11/15 13:00 — 11/15 13:30 · 无执行" [ref=e192] [cursor=pointer]
+                        - button "11/15 13:30 — 11/15 14:00 · 无执行" [ref=e193] [cursor=pointer]
+                        - button "11/15 14:00 — 11/15 14:30 · 无执行" [ref=e194] [cursor=pointer]
+                        - button "11/15 14:30 — 11/15 15:00 · 无执行" [ref=e195] [cursor=pointer]
+                        - button "11/15 15:00 — 11/15 15:30 · 无执行" [ref=e196] [cursor=pointer]
+                        - button "11/15 15:30 — 11/15 16:00 · 无执行" [ref=e197] [cursor=pointer]
+                        - button "11/15 16:00 — 11/15 16:30 · 无执行" [ref=e198] [cursor=pointer]
+                        - button "11/15 16:30 — 11/15 17:00 · 无执行" [ref=e199] [cursor=pointer]
+                        - button "11/15 17:00 — 11/15 17:30 · 无执行" [ref=e200] [cursor=pointer]
+                        - button "11/15 17:30 — 11/15 18:00 · 无执行" [ref=e201] [cursor=pointer]
+                        - button "11/15 18:00 — 11/15 18:30 · 无执行" [ref=e202] [cursor=pointer]
+                        - button "11/15 18:30 — 11/15 19:00 · 无执行" [ref=e203] [cursor=pointer]
+                        - button "11/15 19:00 — 11/15 19:30 · 无执行" [ref=e204] [cursor=pointer]
+                        - button "11/15 19:30 — 11/15 20:00 · 无执行" [ref=e205] [cursor=pointer]
+                        - button "11/15 20:00 — 11/15 20:30 · 无执行" [ref=e206] [cursor=pointer]
+                        - button "11/15 20:30 — 11/15 21:00 · 无执行" [ref=e207] [cursor=pointer]
+                        - button "11/15 21:00 — 11/15 21:30 · 无执行" [ref=e208] [cursor=pointer]
+                        - button "11/15 21:30 — 11/15 22:00 · 无执行" [ref=e209] [cursor=pointer]
+                        - button "11/15 22:00 — 11/15 22:30 · 无执行" [ref=e210] [cursor=pointer]
+                        - button "11/15 22:30 — 11/15 23:00 · 无执行" [ref=e211] [cursor=pointer]
+                        - button "11/15 23:00 — 11/15 23:30 · 无执行" [ref=e212] [cursor=pointer]
+                        - button "11/15 23:30 — 11/16 00:00 · 无执行" [ref=e213] [cursor=pointer]
+                        - button "11/16 00:00 — 11/16 00:30 · 无执行" [ref=e214] [cursor=pointer]
+                        - button "11/16 00:30 — 11/16 01:00 · 无执行" [ref=e215] [cursor=pointer]
+                        - button "11/16 01:00 — 11/16 01:30 · 无执行" [ref=e216] [cursor=pointer]
+                        - button "11/16 01:30 — 11/16 02:00 · 无执行" [ref=e217] [cursor=pointer]
+                        - button "11/16 02:00 — 11/16 02:30 · 无执行" [ref=e218] [cursor=pointer]
+                        - button "11/16 02:30 — 11/16 03:00 · 无执行" [ref=e219] [cursor=pointer]
+                        - button "11/16 03:00 — 11/16 03:30 · 无执行" [ref=e220] [cursor=pointer]
+                        - button "11/16 03:30 — 11/16 04:00 · 无执行" [ref=e221] [cursor=pointer]
+                        - button "11/16 04:00 — 11/16 04:11 · 无执行" [ref=e222] [cursor=pointer]
+                      - generic [ref=e223]:
+                        - generic [ref=e224]: 11/15 04:11
+                        - generic [ref=e225]: 11/15 10:00
+                        - generic [ref=e226]: 11/15 16:00
+                        - generic [ref=e227]: 11/15 22:00
+                        - generic [ref=e228]: 11/16 04:11
+                  - generic [ref=e229]:
+                    - generic [ref=e230]: 1 个时段有执行 · 1 个时段发生错误 · 点选格子查看
+                    - link "查看运行历史 →" [ref=e231] [cursor=pointer]:
+                      - /url: "#/dags/daily_sync?tab=history"
+            - row "↗ first_workflow 2 个任务 · 已启用 运行时段验收 筛选项目：未分组 筛选标签：demo 筛选标签：monitor 手动触发 手动触发 2026/11/15 08:53:58 开始时间 成功 查看 first_workflow" [ref=e232]:
+              - cell "↗ first_workflow 2 个任务 · 已启用 运行时段验收 筛选项目：未分组 筛选标签：demo 筛选标签：monitor" [ref=e233]:
+                - link "↗ first_workflow 2 个任务 · 已启用" [ref=e234] [cursor=pointer]:
+                  - /url: "#/dags/first_workflow"
+                  - generic [ref=e235]: ↗
+                  - generic [ref=e236]:
+                    - strong [ref=e237]: first_workflow
+                    - generic [ref=e238]: 2 个任务 · 已启用
+                - generic "运行时段验收" [ref=e240]
+                - generic [ref=e241]:
+                  - button "筛选项目：未分组" [ref=e242] [cursor=pointer]: 未分组
+                  - button "筛选标签：demo" [ref=e243] [cursor=pointer]: demo
+                  - button "筛选标签：monitor" [ref=e244] [cursor=pointer]: monitor
+              - cell "手动触发" [ref=e245]
+              - cell "手动触发" [ref=e246]
+              - cell "2026/11/15 08:53:58 开始时间" [ref=e247]:
+                - text: 2026/11/15 08:53:58
+                - generic [ref=e248]: 开始时间
+              - cell "成功" [ref=e249]:
+                - generic [ref=e250]: 成功
+              - cell "查看 first_workflow" [ref=e252]:
+                - link "查看 first_workflow" [ref=e253] [cursor=pointer]:
+                  - /url: "#/dags/first_workflow"
+                  - text: →
+            - row "first_workflow 的半小时运行时段 1 个时段有执行 · 0 个时段发生错误 · 点选格子查看 查看运行历史 →" [ref=e254]:
+              - cell "first_workflow 的半小时运行时段 1 个时段有执行 · 0 个时段发生错误 · 点选格子查看 查看运行历史 →" [ref=e255]:
+                - generic [ref=e256]:
+                  - group "first_workflow 的半小时运行时段" [ref=e257]:
+                    - generic [ref=e258]:
+                      - generic [ref=e259]:
+                        - button "11/15 04:11 — 11/15 04:30 · 无执行" [ref=e260] [cursor=pointer]
+                        - button "11/15 04:30 — 11/15 05:00 · 无执行" [ref=e261] [cursor=pointer]
+                        - button "11/15 05:00 — 11/15 05:30 · 无执行" [ref=e262] [cursor=pointer]
+                        - button "11/15 05:30 — 11/15 06:00 · 无执行" [ref=e263] [cursor=pointer]
+                        - button "11/15 06:00 — 11/15 06:30 · 无执行" [ref=e264] [cursor=pointer]
+                        - button "11/15 06:30 — 11/15 07:00 · 无执行" [ref=e265] [cursor=pointer]
+                        - button "11/15 07:00 — 11/15 07:30 · 无执行" [ref=e266] [cursor=pointer]
+                        - button "11/15 07:30 — 11/15 08:00 · 无执行" [ref=e267] [cursor=pointer]
+                        - button "11/15 08:00 — 11/15 08:30 · 无执行" [ref=e268] [cursor=pointer]
+                        - button "11/15 08:30 — 11/15 09:00 · 有执行 · 1 次运行有执行" [ref=e269] [cursor=pointer]
+                        - button "11/15 09:00 — 11/15 09:30 · 无执行" [ref=e270] [cursor=pointer]
+                        - button "11/15 09:30 — 11/15 10:00 · 无执行" [ref=e271] [cursor=pointer]
+                        - button "11/15 10:00 — 11/15 10:30 · 无执行" [ref=e272] [cursor=pointer]
+                        - button "11/15 10:30 — 11/15 11:00 · 无执行" [ref=e273] [cursor=pointer]
+                        - button "11/15 11:00 — 11/15 11:30 · 无执行" [ref=e274] [cursor=pointer]
+                        - button "11/15 11:30 — 11/15 12:00 · 无执行" [ref=e275] [cursor=pointer]
+                        - button "11/15 12:00 — 11/15 12:30 · 无执行" [ref=e276] [cursor=pointer]
+                        - button "11/15 12:30 — 11/15 13:00 · 无执行" [ref=e277] [cursor=pointer]
+                        - button "11/15 13:00 — 11/15 13:30 · 无执行" [ref=e278] [cursor=pointer]
+                        - button "11/15 13:30 — 11/15 14:00 · 无执行" [ref=e279] [cursor=pointer]
+                        - button "11/15 14:00 — 11/15 14:30 · 无执行" [ref=e280] [cursor=pointer]
+                        - button "11/15 14:30 — 11/15 15:00 · 无执行" [ref=e281] [cursor=pointer]
+                        - button "11/15 15:00 — 11/15 15:30 · 无执行" [ref=e282] [cursor=pointer]
+                        - button "11/15 15:30 — 11/15 16:00 · 无执行" [ref=e283] [cursor=pointer]
+                        - button "11/15 16:00 — 11/15 16:30 · 无执行" [ref=e284] [cursor=pointer]
+                        - button "11/15 16:30 — 11/15 17:00 · 无执行" [ref=e285] [cursor=pointer]
+                        - button "11/15 17:00 — 11/15 17:30 · 无执行" [ref=e286] [cursor=pointer]
+                        - button "11/15 17:30 — 11/15 18:00 · 无执行" [ref=e287] [cursor=pointer]
+                        - button "11/15 18:00 — 11/15 18:30 · 无执行" [ref=e288] [cursor=pointer]
+                        - button "11/15 18:30 — 11/15 19:00 · 无执行" [ref=e289] [cursor=pointer]
+                        - button "11/15 19:00 — 11/15 19:30 · 无执行" [ref=e290] [cursor=pointer]
+                        - button "11/15 19:30 — 11/15 20:00 · 无执行" [ref=e291] [cursor=pointer]
+                        - button "11/15 20:00 — 11/15 20:30 · 无执行" [ref=e292] [cursor=pointer]
+                        - button "11/15 20:30 — 11/15 21:00 · 无执行" [ref=e293] [cursor=pointer]
+                        - button "11/15 21:00 — 11/15 21:30 · 无执行" [ref=e294] [cursor=pointer]
+                        - button "11/15 21:30 — 11/15 22:00 · 无执行" [ref=e295] [cursor=pointer]
+                        - button "11/15 22:00 — 11/15 22:30 · 无执行" [ref=e296] [cursor=pointer]
+                        - button "11/15 22:30 — 11/15 23:00 · 无执行" [ref=e297] [cursor=pointer]
+                        - button "11/15 23:00 — 11/15 23:30 · 无执行" [ref=e298] [cursor=pointer]
+                        - button "11/15 23:30 — 11/16 00:00 · 无执行" [ref=e299] [cursor=pointer]
+                        - button "11/16 00:00 — 11/16 00:30 · 无执行" [ref=e300] [cursor=pointer]
+                        - button "11/16 00:30 — 11/16 01:00 · 无执行" [ref=e301] [cursor=pointer]
+                        - button "11/16 01:00 — 11/16 01:30 · 无执行" [ref=e302] [cursor=pointer]
+                        - button "11/16 01:30 — 11/16 02:00 · 无执行" [ref=e303] [cursor=pointer]
+                        - button "11/16 02:00 — 11/16 02:30 · 无执行" [ref=e304] [cursor=pointer]
+                        - button "11/16 02:30 — 11/16 03:00 · 无执行" [ref=e305] [cursor=pointer]
+                        - button "11/16 03:00 — 11/16 03:30 · 无执行" [ref=e306] [cursor=pointer]
+                        - button "11/16 03:30 — 11/16 04:00 · 无执行" [ref=e307] [cursor=pointer]
+                        - button "11/16 04:00 — 11/16 04:11 · 无执行" [ref=e308] [cursor=pointer]
+                      - generic [ref=e309]:
+                        - generic [ref=e310]: 11/15 04:11
+                        - generic [ref=e311]: 11/15 10:00
+                        - generic [ref=e312]: 11/15 16:00
+                        - generic [ref=e313]: 11/15 22:00
+                        - generic [ref=e314]: 11/16 04:11
+                  - generic [ref=e315]:
+                    - generic [ref=e316]: 1 个时段有执行 · 0 个时段发生错误 · 点选格子查看
+                    - link "查看运行历史 →" [ref=e317] [cursor=pointer]:
+                      - /url: "#/dags/first_workflow?tab=history"
+            - row "↗ hourly_pipeline 2 个任务 · 已启用 运行时段验收 筛选项目：未分组 筛选标签：demo 筛选标签：monitor 手动触发 手动触发 2026/11/15 05:44:56 开始时间 成功 查看 hourly_pipeline" [ref=e318]:
+              - cell "↗ hourly_pipeline 2 个任务 · 已启用 运行时段验收 筛选项目：未分组 筛选标签：demo 筛选标签：monitor" [ref=e319]:
+                - link "↗ hourly_pipeline 2 个任务 · 已启用" [ref=e320] [cursor=pointer]:
+                  - /url: "#/dags/hourly_pipeline"
+                  - generic [ref=e321]: ↗
+                  - generic [ref=e322]:
+                    - strong [ref=e323]: hourly_pipeline
+                    - generic [ref=e324]: 2 个任务 · 已启用
+                - generic "运行时段验收" [ref=e326]
+                - generic [ref=e327]:
+                  - button "筛选项目：未分组" [ref=e328] [cursor=pointer]: 未分组
+                  - button "筛选标签：demo" [ref=e329] [cursor=pointer]: demo
+                  - button "筛选标签：monitor" [ref=e330] [cursor=pointer]: monitor
+              - cell "手动触发" [ref=e331]
+              - cell "手动触发" [ref=e332]
+              - cell "2026/11/15 05:44:56 开始时间" [ref=e333]:
+                - text: 2026/11/15 05:44:56
+                - generic [ref=e334]: 开始时间
+              - cell "成功" [ref=e335]:
+                - generic [ref=e336]: 成功
+              - cell "查看 hourly_pipeline" [ref=e338]:
+                - link "查看 hourly_pipeline" [ref=e339] [cursor=pointer]:
+                  - /url: "#/dags/hourly_pipeline"
+                  - text: →
+            - row "hourly_pipeline 的半小时运行时段 3 个时段有执行 · 0 个时段发生错误 · 点选格子查看 查看运行历史 →" [ref=e340]:
+              - cell "hourly_pipeline 的半小时运行时段 3 个时段有执行 · 0 个时段发生错误 · 点选格子查看 查看运行历史 →" [ref=e341]:
+                - generic [ref=e342]:
+                  - group "hourly_pipeline 的半小时运行时段" [ref=e343]:
+                    - generic [ref=e344]:
+                      - generic [ref=e345]:
+                        - button "11/15 04:11 — 11/15 04:30 · 无执行" [ref=e346] [cursor=pointer]
+                        - button "11/15 04:30 — 11/15 05:00 · 无执行" [ref=e347] [cursor=pointer]
+                        - button "11/15 05:00 — 11/15 05:30 · 无执行" [ref=e348] [cursor=pointer]
+                        - button "11/15 05:30 — 11/15 06:00 · 有执行 · 1 次运行有执行" [ref=e349] [cursor=pointer]
+                        - button "11/15 06:00 — 11/15 06:30 · 有执行 · 1 次运行有执行" [ref=e350] [cursor=pointer]
+                        - button "11/15 06:30 — 11/15 07:00 · 有执行 · 1 次运行有执行" [ref=e351] [cursor=pointer]
+                        - button "11/15 07:00 — 11/15 07:30 · 无执行" [ref=e352] [cursor=pointer]
+                        - button "11/15 07:30 — 11/15 08:00 · 无执行" [ref=e353] [cursor=pointer]
+                        - button "11/15 08:00 — 11/15 08:30 · 无执行" [ref=e354] [cursor=pointer]
+                        - button "11/15 08:30 — 11/15 09:00 · 无执行" [ref=e355] [cursor=pointer]
+                        - button "11/15 09:00 — 11/15 09:30 · 无执行" [ref=e356] [cursor=pointer]
+                        - button "11/15 09:30 — 11/15 10:00 · 无执行" [ref=e357] [cursor=pointer]
+                        - button "11/15 10:00 — 11/15 10:30 · 无执行" [ref=e358] [cursor=pointer]
+                        - button "11/15 10:30 — 11/15 11:00 · 无执行" [ref=e359] [cursor=pointer]
+                        - button "11/15 11:00 — 11/15 11:30 · 无执行" [ref=e360] [cursor=pointer]
+                        - button "11/15 11:30 — 11/15 12:00 · 无执行" [ref=e361] [cursor=pointer]
+                        - button "11/15 12:00 — 11/15 12:30 · 无执行" [ref=e362] [cursor=pointer]
+                        - button "11/15 12:30 — 11/15 13:00 · 无执行" [ref=e363] [cursor=pointer]
+                        - button "11/15 13:00 — 11/15 13:30 · 无执行" [ref=e364] [cursor=pointer]
+                        - button "11/15 13:30 — 11/15 14:00 · 无执行" [ref=e365] [cursor=pointer]
+                        - button "11/15 14:00 — 11/15 14:30 · 无执行" [ref=e366] [cursor=pointer]
+                        - button "11/15 14:30 — 11/15 15:00 · 无执行" [ref=e367] [cursor=pointer]
+                        - button "11/15 15:00 — 11/15 15:30 · 无执行" [ref=e368] [cursor=pointer]
+                        - button "11/15 15:30 — 11/15 16:00 · 无执行" [ref=e369] [cursor=pointer]
+                        - button "11/15 16:00 — 11/15 16:30 · 无执行" [ref=e370] [cursor=pointer]
+                        - button "11/15 16:30 — 11/15 17:00 · 无执行" [ref=e371] [cursor=pointer]
+                        - button "11/15 17:00 — 11/15 17:30 · 无执行" [ref=e372] [cursor=pointer]
+                        - button "11/15 17:30 — 11/15 18:00 · 无执行" [ref=e373] [cursor=pointer]
+                        - button "11/15 18:00 — 11/15 18:30 · 无执行" [ref=e374] [cursor=pointer]
+                        - button "11/15 18:30 — 11/15 19:00 · 无执行" [ref=e375] [cursor=pointer]
+                        - button "11/15 19:00 — 11/15 19:30 · 无执行" [ref=e376] [cursor=pointer]
+                        - button "11/15 19:30 — 11/15 20:00 · 无执行" [ref=e377] [cursor=pointer]
+                        - button "11/15 20:00 — 11/15 20:30 · 无执行" [ref=e378] [cursor=pointer]
+                        - button "11/15 20:30 — 11/15 21:00 · 无执行" [ref=e379] [cursor=pointer]
+                        - button "11/15 21:00 — 11/15 21:30 · 无执行" [ref=e380] [cursor=pointer]
+                        - button "11/15 21:30 — 11/15 22:00 · 无执行" [ref=e381] [cursor=pointer]
+                        - button "11/15 22:00 — 11/15 22:30 · 无执行" [ref=e382] [cursor=pointer]
+                        - button "11/15 22:30 — 11/15 23:00 · 无执行" [ref=e383] [cursor=pointer]
+                        - button "11/15 23:00 — 11/15 23:30 · 无执行" [ref=e384] [cursor=pointer]
+                        - button "11/15 23:30 — 11/16 00:00 · 无执行" [ref=e385] [cursor=pointer]
+                        - button "11/16 00:00 — 11/16 00:30 · 无执行" [ref=e386] [cursor=pointer]
+                        - button "11/16 00:30 — 11/16 01:00 · 无执行" [ref=e387] [cursor=pointer]
+                        - button "11/16 01:00 — 11/16 01:30 · 无执行" [ref=e388] [cursor=pointer]
+                        - button "11/16 01:30 — 11/16 02:00 · 无执行" [ref=e389] [cursor=pointer]
+                        - button "11/16 02:00 — 11/16 02:30 · 无执行" [ref=e390] [cursor=pointer]
+                        - button "11/16 02:30 — 11/16 03:00 · 无执行" [ref=e391] [cursor=pointer]
+                        - button "11/16 03:00 — 11/16 03:30 · 无执行" [ref=e392] [cursor=pointer]
+                        - button "11/16 03:30 — 11/16 04:00 · 无执行" [ref=e393] [cursor=pointer]
+                        - button "11/16 04:00 — 11/16 04:11 · 无执行" [ref=e394] [cursor=pointer]
+                      - generic [ref=e395]:
+                        - generic [ref=e396]: 11/15 04:11
+                        - generic [ref=e397]: 11/15 10:00
+                        - generic [ref=e398]: 11/15 16:00
+                        - generic [ref=e399]: 11/15 22:00
+                        - generic [ref=e400]: 11/16 04:11
+                  - generic [ref=e401]:
+                    - generic [ref=e402]: 3 个时段有执行 · 0 个时段发生错误 · 点选格子查看
+                    - link "查看运行历史 →" [ref=e403] [cursor=pointer]:
+                      - /url: "#/dags/hourly_pipeline?tab=history"
+            - row "↗ retrying_pipeline 2 个任务 · 已启用 运行时段验收 筛选项目：未分组 筛选标签：demo 筛选标签：monitor 手动触发 手动触发 2026/11/15 07:44:56 开始时间 运行中 1 次运行中 查看 retrying_pipeline" [ref=e404]:
+              - cell "↗ retrying_pipeline 2 个任务 · 已启用 运行时段验收 筛选项目：未分组 筛选标签：demo 筛选标签：monitor" [ref=e405]:
+                - link "↗ retrying_pipeline 2 个任务 · 已启用" [ref=e406] [cursor=pointer]:
+                  - /url: "#/dags/retrying_pipeline"
+                  - generic [ref=e407]: ↗
+                  - generic [ref=e408]:
+                    - strong [ref=e409]: retrying_pipeline
+                    - generic [ref=e410]: 2 个任务 · 已启用
+                - generic "运行时段验收" [ref=e412]
+                - generic [ref=e413]:
+                  - button "筛选项目：未分组" [ref=e414] [cursor=pointer]: 未分组
+                  - button "筛选标签：demo" [ref=e415] [cursor=pointer]: demo
+                  - button "筛选标签：monitor" [ref=e416] [cursor=pointer]: monitor
+              - cell "手动触发" [ref=e417]
+              - cell "手动触发" [ref=e418]
+              - cell "2026/11/15 07:44:56 开始时间" [ref=e419]:
+                - text: 2026/11/15 07:44:56
+                - generic [ref=e420]: 开始时间
+              - cell "运行中 1 次运行中" [ref=e421]:
+                - generic [ref=e422]: 运行中
+                - generic [ref=e424]: 1 次运行中
+              - cell "查看 retrying_pipeline" [ref=e425]:
+                - link "查看 retrying_pipeline" [ref=e426] [cursor=pointer]:
+                  - /url: "#/dags/retrying_pipeline"
+                  - text: →
+            - row "retrying_pipeline 的半小时运行时段 2 个时段有执行 · 1 个时段发生错误 · 点选格子查看 查看运行历史 →" [ref=e427]:
+              - cell "retrying_pipeline 的半小时运行时段 2 个时段有执行 · 1 个时段发生错误 · 点选格子查看 查看运行历史 →" [ref=e428]:
+                - generic [ref=e429]:
+                  - group "retrying_pipeline 的半小时运行时段" [ref=e430]:
+                    - generic [ref=e431]:
+                      - generic [ref=e432]:
+                        - button "11/15 04:11 — 11/15 04:30 · 无执行" [ref=e433] [cursor=pointer]
+                        - button "11/15 04:30 — 11/15 05:00 · 无执行" [ref=e434] [cursor=pointer]
+                        - button "11/15 05:00 — 11/15 05:30 · 无执行" [ref=e435] [cursor=pointer]
+                        - button "11/15 05:30 — 11/15 06:00 · 无执行" [ref=e436] [cursor=pointer]
+                        - button "11/15 06:00 — 11/15 06:30 · 无执行" [ref=e437] [cursor=pointer]
+                        - button "11/15 06:30 — 11/15 07:00 · 无执行" [ref=e438] [cursor=pointer]
+                        - button "11/15 07:00 — 11/15 07:30 · 无执行" [ref=e439] [cursor=pointer]
+                        - button "11/15 07:30 — 11/15 08:00 · 有执行 · 1 次运行有执行" [ref=e440] [cursor=pointer]
+                        - button "11/15 08:00 — 11/15 08:30 · 发生错误 · 1 次运行有执行 · 1 次运行发生错误（含重试）" [ref=e441] [cursor=pointer]:
+                          - generic [ref=e442]: "!"
+                        - button "11/15 08:30 — 11/15 09:00 · 无执行" [ref=e443] [cursor=pointer]
+                        - button "11/15 09:00 — 11/15 09:30 · 无执行" [ref=e444] [cursor=pointer]
+                        - button "11/15 09:30 — 11/15 10:00 · 无执行" [ref=e445] [cursor=pointer]
+                        - button "11/15 10:00 — 11/15 10:30 · 无执行" [ref=e446] [cursor=pointer]
+                        - button "11/15 10:30 — 11/15 11:00 · 无执行" [ref=e447] [cursor=pointer]
+                        - button "11/15 11:00 — 11/15 11:30 · 无执行" [ref=e448] [cursor=pointer]
+                        - button "11/15 11:30 — 11/15 12:00 · 无执行" [ref=e449] [cursor=pointer]
+                        - button "11/15 12:00 — 11/15 12:30 · 无执行" [ref=e450] [cursor=pointer]
+                        - button "11/15 12:30 — 11/15 13:00 · 无执行" [ref=e451] [cursor=pointer]
+                        - button "11/15 13:00 — 11/15 13:30 · 无执行" [ref=e452] [cursor=pointer]
+                        - button "11/15 13:30 — 11/15 14:00 · 无执行" [ref=e453] [cursor=pointer]
+                        - button "11/15 14:00 — 11/15 14:30 · 无执行" [ref=e454] [cursor=pointer]
+                        - button "11/15 14:30 — 11/15 15:00 · 无执行" [ref=e455] [cursor=pointer]
+                        - button "11/15 15:00 — 11/15 15:30 · 无执行" [ref=e456] [cursor=pointer]
+                        - button "11/15 15:30 — 11/15 16:00 · 无执行" [ref=e457] [cursor=pointer]
+                        - button "11/15 16:00 — 11/15 16:30 · 无执行" [ref=e458] [cursor=pointer]
+                        - button "11/15 16:30 — 11/15 17:00 · 无执行" [ref=e459] [cursor=pointer]
+                        - button "11/15 17:00 — 11/15 17:30 · 无执行" [ref=e460] [cursor=pointer]
+                        - button "11/15 17:30 — 11/15 18:00 · 无执行" [ref=e461] [cursor=pointer]
+                        - button "11/15 18:00 — 11/15 18:30 · 无执行" [ref=e462] [cursor=pointer]
+                        - button "11/15 18:30 — 11/15 19:00 · 无执行" [ref=e463] [cursor=pointer]
+                        - button "11/15 19:00 — 11/15 19:30 · 无执行" [ref=e464] [cursor=pointer]
+                        - button "11/15 19:30 — 11/15 20:00 · 无执行" [ref=e465] [cursor=pointer]
+                        - button "11/15 20:00 — 11/15 20:30 · 无执行" [ref=e466] [cursor=pointer]
+                        - button "11/15 20:30 — 11/15 21:00 · 无执行" [ref=e467] [cursor=pointer]
+                        - button "11/15 21:00 — 11/15 21:30 · 无执行" [ref=e468] [cursor=pointer]
+                        - button "11/15 21:30 — 11/15 22:00 · 无执行" [ref=e469] [cursor=pointer]
+                        - button "11/15 22:00 — 11/15 22:30 · 无执行" [ref=e470] [cursor=pointer]
+                        - button "11/15 22:30 — 11/15 23:00 · 无执行" [ref=e471] [cursor=pointer]
+                        - button "11/15 23:00 — 11/15 23:30 · 无执行" [ref=e472] [cursor=pointer]
+                        - button "11/15 23:30 — 11/16 00:00 · 无执行" [ref=e473] [cursor=pointer]
+                        - button "11/16 00:00 — 11/16 00:30 · 无执行" [ref=e474] [cursor=pointer]
+                        - button "11/16 00:30 — 11/16 01:00 · 无执行" [ref=e475] [cursor=pointer]
+                        - button "11/16 01:00 — 11/16 01:30 · 无执行" [ref=e476] [cursor=pointer]
+                        - button "11/16 01:30 — 11/16 02:00 · 无执行" [ref=e477] [cursor=pointer]
+                        - button "11/16 02:00 — 11/16 02:30 · 无执行" [ref=e478] [cursor=pointer]
+                        - button "11/16 02:30 — 11/16 03:00 · 无执行" [ref=e479] [cursor=pointer]
+                        - button "11/16 03:00 — 11/16 03:30 · 无执行" [ref=e480] [cursor=pointer]
+                        - button "11/16 03:30 — 11/16 04:00 · 无执行" [ref=e481] [cursor=pointer]
+                        - button "11/16 04:00 — 11/16 04:11 · 当前等待 · 1 次运行正在等待调度、依赖或重试" [ref=e482] [cursor=pointer]
+                      - generic [ref=e483]:
+                        - generic [ref=e484]: 11/15 04:11
+                        - generic [ref=e485]: 11/15 10:00
+                        - generic [ref=e486]: 11/15 16:00
+                        - generic [ref=e487]: 11/15 22:00
+                        - generic [ref=e488]: 11/16 04:11
+                  - generic [ref=e489]:
+                    - generic [ref=e490]: 2 个时段有执行 · 1 个时段发生错误 · 点选格子查看
+                    - link "查看运行历史 →" [ref=e491] [cursor=pointer]:
+                      - /url: "#/dags/retrying_pipeline?tab=history"
+        - generic [ref=e492]:
+          - generic [ref=e493]: 4 条记录
+          - generic [ref=e494]:
+            - button "上一页" [disabled] [ref=e495]
+            - generic [ref=e496]: 第 1 页
+            - button "下一页" [disabled] [ref=e497]
+      - generic [ref=e498]:
+        - text: EASYFLOW
+        - generic [ref=e499]: 轻量、清晰的工作流管理
