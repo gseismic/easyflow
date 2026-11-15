@@ -16,6 +16,15 @@ def _timestamp(value: str | None) -> float | None:
     return datetime.fromisoformat(value).timestamp()
 
 
+def _range_params(start: datetime, end: datetime) -> dict[str, float]:
+    # SQLite 时间只用于可索引的粗筛；预留一秒以避免微秒舍入误删边界记录。
+    # 无法由 SQLite 解析的 Python ISO 格式在查询中保留，仍按 _timestamp 精确判断。
+    return {
+        "start_jd": start.timestamp() / 86400 + 2440587.5 - 1 / 86400,
+        "end_jd": end.timestamp() / 86400 + 2440587.5 + 1 / 86400,
+    }
+
+
 def workflow_uptime(
     database: Path,
     *,
@@ -48,12 +57,15 @@ def workflow_uptime(
             raise ValueError("uptime 时区无效，请使用有效的 IANA 时区。") from exc
         local_start, local_end = start.astimezone(zone), end.astimezone(zone)
         days = (local_end.date() - local_start.date()).days
-        if local_start.time() != time.min or local_end.time() != time.min:
+        def midnight(day):
+            return datetime.combine(day, time.min, zone).astimezone(UTC)
+
+        if start != midnight(local_start.date()) or end != midnight(local_end.date()):
             raise ValueError("按天汇总的起止时间必须是指定时区的午夜。")
         if not 1 <= days <= 31:
             raise ValueError("按天汇总的范围必须为 1 到 31 个本地日。")
         boundaries = [
-            (local_start + timedelta(days=index)).astimezone(UTC).timestamp()
+            midnight(local_start.date() + timedelta(days=index)).timestamp()
             for index in range(days + 1)
         ]
         if any(left >= right for left, right in pairwise(boundaries)):
@@ -81,6 +93,7 @@ def workflow_uptime(
             ((i, boundaries[i], boundaries[i + 1]) for i in range(len(boundaries) - 1)),
         )
         # 各项聚合共享读取快照；不把任务数量和运行数量混为一谈。
+        # CROSS JOIN 固定由少量工作流 ID 驱动范围索引，避免优化器先扫描全部历史。
         activity = connection.execute(
             """
             WITH intervals AS (
@@ -89,15 +102,19 @@ def workflow_uptime(
                         CASE WHEN t.state = 'running' AND r.state = 'running'
                              THEN :now ELSE uptime_time(t.started_at) END), :now) AS ended,
                     (t.state = 'running' AND t.ended_at IS NULL AND r.state = 'running') AS running
-                FROM uptime_ids i JOIN task_try t ON t.dag_id = i.dag_id
-                JOIN dag_run r ON r.dag_id = t.dag_id AND r.run_id = t.run_id
-                WHERE t.started_at IS NOT NULL AND uptime_time(t.started_at) < :end
+                FROM uptime_ids i CROSS JOIN task_try t ON t.dag_id = i.dag_id
+                CROSS JOIN dag_run r ON r.dag_id = t.dag_id AND r.run_id = t.run_id
+                WHERE COALESCE(julianday(t.ended_at), 1e100) >= :start_jd
+                    AND COALESCE(julianday(t.started_at), 0) < :end_jd
+                    AND t.started_at IS NOT NULL AND uptime_time(t.started_at) < :end
                 UNION ALL
                 SELECT r.dag_id, r.run_id, uptime_time(r.start_date),
                     MIN(COALESCE(uptime_time(r.end_date), :now), :now),
                     (r.state = 'running' AND r.end_date IS NULL)
-                FROM uptime_ids i JOIN dag_run r ON r.dag_id = i.dag_id
+                FROM uptime_ids i CROSS JOIN dag_run r ON r.dag_id = i.dag_id
                 WHERE r.start_date IS NOT NULL AND r.state != 'queued'
+                    AND COALESCE(julianday(r.end_date), 1e100) >= :start_jd
+                    AND COALESCE(julianday(r.start_date), 0) < :end_jd
                     AND uptime_time(r.start_date) < :end
                     AND NOT EXISTS (
                         SELECT 1 FROM task_try t
@@ -113,19 +130,23 @@ def workflow_uptime(
                 AND (a.ended > s.start OR (a.ended = a.started AND a.started >= s.start))
             GROUP BY s.position, a.dag_id
             """,
-            {"end": end.timestamp(), "now": as_of},
+            {**_range_params(start, end), "end": end.timestamp(), "now": as_of},
         ).fetchall()
         failures = connection.execute(
             """
             WITH errors AS (
                 SELECT t.dag_id, t.run_id, uptime_time(t.ended_at) AS failed_at,
                     t.task_id, t.try_number
-                FROM uptime_ids i JOIN task_try t ON t.dag_id = i.dag_id
+                FROM uptime_ids i CROSS JOIN task_try t ON t.dag_id = i.dag_id
                 WHERE t.state = 'failed' AND t.ended_at IS NOT NULL
+                    AND COALESCE(julianday(t.ended_at), 1e100) >= :start_jd
+                    AND COALESCE(julianday(t.ended_at), 0) < :end_jd
                 UNION ALL
                 SELECT r.dag_id, r.run_id, uptime_time(r.end_date), NULL, NULL
-                FROM uptime_ids i JOIN dag_run r ON r.dag_id = i.dag_id
+                FROM uptime_ids i CROSS JOIN dag_run r ON r.dag_id = i.dag_id
                 WHERE r.state = 'failed' AND r.end_date IS NOT NULL
+                    AND COALESCE(julianday(r.end_date), 1e100) >= :start_jd
+                    AND COALESCE(julianday(r.end_date), 0) < :end_jd
             ), matched AS (
                 SELECT s.position, e.*, ROW_NUMBER() OVER (
                     PARTITION BY s.position, e.dag_id
@@ -140,12 +161,12 @@ def workflow_uptime(
                 MAX(CASE WHEN priority = 1 THEN try_number END) AS sample_try_number
             FROM matched GROUP BY position, dag_id
             """,
-            {"now": as_of},
+            {**_range_params(start, end), "now": as_of},
         ).fetchall()
         waiting = connection.execute(
             "SELECT r.dag_id, COUNT(DISTINCT r.run_id) AS waiting_run_count, "
             "MIN(r.run_id) AS sample_run_id FROM uptime_ids i "
-            "JOIN dag_run r ON r.dag_id = i.dag_id "
+            "CROSS JOIN dag_run r ON r.dag_id = i.dag_id "
             "WHERE r.state IN ('queued', 'running') AND uptime_time(r.queued_at) <= ? "
             "AND (r.state = 'queued' OR EXISTS (SELECT 1 FROM task_instance t "
             "WHERE t.dag_id = r.dag_id AND t.run_id = r.run_id "
@@ -232,6 +253,7 @@ def workflow_failures(
     if current.tzinfo is None:
         raise ValueError("now 必须带时区。")
     params = {
+        **_range_params(start, end),
         "dag_id": dag_id,
         "start": start.timestamp(),
         "end": end.timestamp(),
@@ -249,6 +271,8 @@ def workflow_failures(
                 r.state AS run_state
             FROM task_try t JOIN dag_run r ON r.dag_id = t.dag_id AND r.run_id = t.run_id
             WHERE t.dag_id = :dag_id AND t.state = 'failed'
+                AND COALESCE(julianday(t.ended_at), 1e100) >= :start_jd
+                AND COALESCE(julianday(t.ended_at), 0) < :end_jd
                 AND uptime_time(t.ended_at) >= :start AND uptime_time(t.ended_at) < :end
                 AND uptime_time(t.ended_at) <= :now
         ), failures AS (
@@ -258,6 +282,8 @@ def workflow_failures(
                 uptime_time(r.end_date), NULL, NULL, 0, r.state
             FROM dag_run r
             WHERE r.dag_id = :dag_id AND r.state = 'failed'
+                AND COALESCE(julianday(r.end_date), 1e100) >= :start_jd
+                AND COALESCE(julianday(r.end_date), 0) < :end_jd
                 AND uptime_time(r.end_date) >= :start AND uptime_time(r.end_date) < :end
                 AND uptime_time(r.end_date) <= :now
                 AND NOT EXISTS (SELECT 1 FROM failed_tasks t WHERE t.run_id = r.run_id)

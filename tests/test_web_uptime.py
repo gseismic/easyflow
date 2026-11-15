@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from easyflow._internal.state_store import SQLiteStateStore
+from easyflow.web import uptime
 from easyflow.web.app import create_app
 from easyflow.web.uptime import workflow_failures, workflow_uptime
 
@@ -673,3 +674,94 @@ def test_daily_slots_and_current_waiting_follow_dst_boundaries(tmp_path, day, ho
     ]
     assert durations == hours
     assert [slot["state"] for slot in slots] == ["idle", "waiting", "future"]
+
+
+@pytest.mark.parametrize(
+    "zone,first,last,hours",
+    [
+        ("America/Santiago", "2026-09-06T01:00:00-03:00", "2026-09-08T00:00:00-03:00", [23, 24]),
+        ("America/Asuncion", "2017-10-01T01:00:00-03:00", "2017-11-01T00:00:00-03:00", [23] + [24] * 30),
+    ],
+)
+def test_daily_boundaries_allow_normalized_midnight_without_carrying_hour(
+    tmp_path, zone, first, last, hours
+):
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    store.init_db()
+    data = workflow_uptime(
+        store.path,
+        dag_ids=["demo"],
+        start_at=datetime.fromisoformat(first),
+        end_at=datetime.fromisoformat(last),
+        granularity="day",
+        timezone_name=zone,
+    )
+    assert [
+        (datetime.fromisoformat(slot["end_at"]) - datetime.fromisoformat(slot["start_at"])).total_seconds() / 3600
+        for slot in data["workflows"]["demo"]
+    ] == hours
+
+
+def test_uptime_excludes_finished_history_before_python_time_conversion(tmp_path, monkeypatch):
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    store.init_db()
+    old_start, old_end = "2020-01-01T00:00:00+00:00", "2020-01-01T00:01:00+00:00"
+    with sqlite3.connect(store.path) as connection:
+        for index in range(200):
+            for kind in ["task", "legacy"]:
+                run_id = f"{kind}-{index}"
+                add_run(connection, run_id, start=old_start, end=old_end, state="failed")
+                if kind == "task":
+                    add_try(connection, run_id, start=old_start, end=old_end, state="failed")
+        # 开始于查询前的跨日执行必须保留，包括没有 ended_at 的旧尝试。
+        for run_id, ended in [("cross", "2026-01-02T00:00:01+00:00"), ("open-ended", None)]:
+            add_run(connection, run_id, start=old_start, end="2026-01-02T00:00:01+00:00")
+            add_try(connection, run_id, start=old_start, end=ended)
+        # 瞬时事件位于左边界；偏移时区和微秒不能被 SQLite 粗筛误删。
+        for run_id, at in [
+            ("instant", START.isoformat()),
+            ("offset", "2026-01-02T08:00:00+08:00"),
+            ("microsecond", "2026-01-02T00:29:59.999999+00:00"),
+            ("python-iso", "2026-01-02T08:00:00+08:00:00"),
+        ]:
+            add_run(connection, run_id)
+            add_try(connection, run_id, start=at, end=at, state="failed")
+
+    converted = []
+    original = uptime._timestamp
+    plans = []
+    original_connect = sqlite3.connect
+
+    class RangeConnection(sqlite3.Connection):
+        def execute(self, sql, parameters=()):
+            if "WITH intervals" in sql or "WITH errors" in sql:
+                plans.extend(
+                    row[3] for row in super().execute("EXPLAIN QUERY PLAN " + sql, parameters)
+                )
+            return super().execute(sql, parameters)
+
+    def connect(*args, **kwargs):
+        return original_connect(*args, **kwargs, factory=RangeConnection)
+
+    def timestamp(value):
+        converted.append(value)
+        return original(value)
+
+    monkeypatch.setattr(uptime, "_timestamp", timestamp)
+    monkeypatch.setattr(uptime.sqlite3, "connect", connect)
+    params = {"start_at": START, "end_at": START + timedelta(days=1), "now": START + timedelta(days=2)}
+    slots = workflow_uptime(store.path, dag_ids=["demo"], **params)["workflows"]["demo"]
+    assert slots[0]["run_count"] == 6
+    assert slots[0]["failed_run_count"] == 4
+    assert slots[1]["run_count"] == 0
+    assert old_end not in converted
+    assert "SCAN t" not in plans and "SCAN r" not in plans
+    for index in ["ix_task_try_uptime_end", "ix_dag_run_uptime_end"]:
+        assert any(index in detail and "<expr>>?" in detail for detail in plans)
+    converted.clear()
+    failures = workflow_failures(store.path, dag_id="demo", **params)
+    assert failures["total"] == 4
+    assert old_end not in converted
+    # 索引须能在已有记录上重复建立，不依赖新数据库或清空历史。
+    store.init_db()
+    store.init_db()

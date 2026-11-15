@@ -37,6 +37,49 @@ test("夏令时的本地日保留 23 或 25 小时，每格仍为半小时", () 
   }
 });
 
+test("午夜跳变后的日周月边界独立构造，不继承归一化的 01:00", () => {
+  const original = process.env.TZ;
+  process.env.TZ = "America/Santiago";
+  try {
+    const day = dayBounds("2026-09-06");
+    assert.equal(day.start.getHours(), 1);
+    assert.equal(day.end.getHours(), 0);
+    assert.equal(localDay(day.end), "2026-09-07");
+    assert.equal((day.end - day.start) / 1800000, 46);
+    for (const [period, first, last] of [
+      ["week", "2026-08-31", "2026-09-07"],
+      ["month", "2026-09-01", "2026-10-01"],
+    ]) {
+      const bounds = periodBounds("2026-09-06", period);
+      assert.equal(localDay(bounds.start), first);
+      assert.equal(localDay(bounds.end), last);
+      assert.equal(bounds.start.getHours(), 0);
+      assert.equal(bounds.end.getHours(), 0);
+      const url = new URL(uptimeUrl(["demo"], "2026-09-06", period), "http://localhost");
+      assert.equal(url.searchParams.get("start_at"), bounds.start.toISOString());
+      assert.equal(url.searchParams.get("end_at"), bounds.end.toISOString());
+    }
+    assert.equal(shiftPeriod("2026-09-06", "month", 1), "2026-10-06");
+  } finally {
+    if (original === undefined) delete process.env.TZ;
+    else process.env.TZ = original;
+  }
+});
+
+test("月初自身发生午夜跳变时，月末仍使用下月自己的午夜", () => {
+  const original = process.env.TZ;
+  process.env.TZ = "America/Asuncion";
+  try {
+    const bounds = periodBounds("2017-10-01", "month");
+    assert.equal(bounds.start.getHours(), 1);
+    assert.equal(bounds.end.getHours(), 0);
+    assert.equal((bounds.end - bounds.start) / 3600000, 31 * 24 - 1);
+  } finally {
+    if (original === undefined) delete process.env.TZ;
+    else process.env.TZ = original;
+  }
+});
+
 test("格子说明包含时间、错误运行数和等待语义", () => {
   const result = slotDescription({
     start_at: "2026-01-02T00:00:00Z", end_at: "2026-01-02T00:30:00Z", state: "failed",

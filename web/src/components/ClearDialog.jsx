@@ -38,6 +38,7 @@ export default function ClearDialog({ dagId, runId, taskId, onClose, onDone }) {
         重跑范围
         <select
           value={scope}
+          disabled={busy}
           onChange={(event) => {
             setScope(event.target.value);
             setPreview(null);

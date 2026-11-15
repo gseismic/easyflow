@@ -75,3 +75,11 @@
 
 - 更新模型：Codex（基于 GPT-6；完整模型 ID 未提供）。状态保持未解决。
 - 上一事件的实际代码提交为 `7dd1ca82adf1618c864620265e1fe5768a3f051c`，默认 Ruff 的 194 项既有诊断不变；用户在已知该基线状态下明确要求完成后先提交再继续调研。未推送。
+
+## 2026-11-15 19:49 Asia/Shanghai：Web 页面巡查修复后的基线复核
+
+- 更新模型：Codex（基于 GPT-6；完整实际模型 ID 未由环境提供）。状态保持未解决，本次未改变 lint 策略。
+- 对比版本：基准完整提交 `3d4b58db81336bf30a930c7d7cc676a2fbba71c5` 与本轮 `WORKTREE`；相关 Python 改动为 `src/easyflow/_internal/state_store.py`、`src/easyflow/web/uptime.py` 和 `tests/test_web_uptime.py`，尚未提交。
+- 使用同一 `uv run ruff check --output-format json` 分别检查导出的基准及当前 `src tests examples`，按相对文件、规则及信息计数：两者均 194 项，新增 0、减少 0。默认全量检查仍失败，不能视为本问题已解决。
+- 核心 `--select E4,E7,E9,F`、uptime 及其测试文件默认检查、`git diff --check` 通过；265 项后端、22 项前端、构建、隔离浏览器和 DST/性能回归通过。
+- 关联结果：`docs/plans/PLAN-20261115-010-model-unknown-web-review-fixes-OUTCOME.md`；没有本轮修复 commit，未推送。

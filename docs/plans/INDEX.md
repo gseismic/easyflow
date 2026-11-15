@@ -53,3 +53,5 @@
 - 2026-11-15 17:10 Asia/Shanghai：[失败详情原位展开结果](PLAN-20261115-008-model-unknown-inline-failures-OUTCOME.md)，已完成；262 项后端、14 项前端、构建及桌面/窄屏/异常状态浏览器验证通过，其他三项建议记为待评估，准备提交本轮改动。
 - 2026-11-15 17:55 Asia/Shanghai：[树形导航与左右工作台计划](PLAN-20261115-009-model-unknown-sidebar-dashboard.md)，进行中；按项目组织左树、右侧详情标签和窄屏抽屉，完成后执行 review-fix-loop。
 - 2026-11-15 18:34 Asia/Shanghai：[树形导航与左右工作台结果](PLAN-20261115-009-model-unknown-sidebar-dashboard-OUTCOME.md)，已完成；20 项前端、40 项相关后端、构建与三组浏览器验收通过，review-fix-loop 最后一轮覆盖完成且无待修复逻辑问题，准备提交。
+- 2026-11-15 19:36 Asia/Shanghai：[Web 巡查与 Review 修复计划](PLAN-20261115-010-model-unknown-web-review-fixes.md)，进行中；修复四项 P2 与窄屏滚动提示，保留指定报告及 19 张截图，补充边界、性能和浏览器回归。
+- 2026-11-15 19:49 Asia/Shanghai：[Web 巡查与 Review 修复结果](PLAN-20261115-010-model-unknown-web-review-fixes-OUTCOME.md)，已完成（WORKTREE）；四项 P2 与一项 P3 已修复，265 项后端、22 项前端、构建及浏览器回归通过，保留 19 张原始截图；75 万历史样本空日查询约 25 毫秒，默认 Ruff 既有诊断无新增。

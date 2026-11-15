@@ -1,4 +1,5 @@
 import Status from "./Status";
+import HorizontalScroll from "./HorizontalScroll";
 
 export default function Graph({ tasks, states, selected, onSelect }) {
   if (!tasks.length)
@@ -19,7 +20,7 @@ export default function Graph({ tasks, states, selected, onSelect }) {
   const width = Math.max(400, ...[...points.values()].map((p) => p.x + 216));
   const height = Math.max(150, ...[...points.values()].map((p) => p.y + 88));
   return (
-    <div className="graph-scroll">
+    <HorizontalScroll className="graph-scroll" label="任务依赖图" hint="左右滑动或使用方向键查看完整依赖图">
       <div className="graph" style={{ width, height }}>
         <svg
           className="graph-edges"
@@ -72,11 +73,11 @@ export default function Graph({ tasks, states, selected, onSelect }) {
               <span className="node-title" title={task.task_id}>
                 {task.task_id}
               </span>
-              <Status value={states?.[task.task_id]} />
+              <Status value={states && Object.hasOwn(states, task.task_id) ? states[task.task_id] : undefined} />
             </button>
           );
         })}
       </div>
-    </div>
+    </HorizontalScroll>
   );
 }

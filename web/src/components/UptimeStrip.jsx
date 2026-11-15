@@ -2,6 +2,7 @@ import { useId, useRef, useState } from "react";
 import { workflowHref } from "../listRoute";
 import { localDay, slotDescription, slotTime, uptimeRunHref } from "../uptime";
 import UptimeFailures from "./UptimeFailures";
+import HorizontalScroll from "./HorizontalScroll";
 
 export default function UptimeStrip({ dagId, slots, error, period = "day", onOpenDay }) {
   const [selectedStart, setSelectedStart] = useState(null);
@@ -35,7 +36,8 @@ export default function UptimeStrip({ dagId, slots, error, period = "day", onOpe
         closeSelection();
       }
     }}>
-      <div className="uptime-scroll" role="group" aria-label={`${dagId} 的${daily ? "每日" : "半小时"}运行时段`}>
+      <HorizontalScroll className="uptime-scroll" label={`${dagId} 的${daily ? "每日" : "半小时"}运行时段`}
+        hint={`左右滑动或使用方向键查看${daily ? "完整日期" : "全天时段"}`}>
         <div className={`uptime-track${daily ? " uptime-daily-track" : ""}`} style={{ "--slot-count": slots.length }}>
           <div className="uptime-slots">
             {slots.map((slot, index) => (
@@ -64,7 +66,7 @@ export default function UptimeStrip({ dagId, slots, error, period = "day", onOpe
             <span className="uptime-axis-end">{slotTime(slots[slots.length - 1].end_at)} (+1日)</span>
           </div>}
         </div>
-      </div>
+      </HorizontalScroll>
       <div className="uptime-caption" aria-live="polite">
         <span>{selected ? describe(selected) :
           activityCount || failedCount ? `${activityCount} ${daily ? "天" : "个时段"}有执行 · ${failedCount} ${daily ? "天" : "个时段"}发生错误 · 点选格子查看` :

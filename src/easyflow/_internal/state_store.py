@@ -154,6 +154,13 @@ CREATE TABLE IF NOT EXISTS task_try (
         REFERENCES task_instance(dag_id, run_id, task_id, map_index)
 );
 
+-- 未结束或 SQLite 无法解析的 ISO 时间保留为候选，再由读取端精确判断。
+CREATE INDEX IF NOT EXISTS ix_task_try_uptime_end
+ON task_try(dag_id, COALESCE(julianday(ended_at), 1e100));
+
+CREATE INDEX IF NOT EXISTS ix_dag_run_uptime_end
+ON dag_run(dag_id, COALESCE(julianday(end_date), 1e100));
+
 CREATE TABLE IF NOT EXISTS xcom (
     dag_id TEXT NOT NULL,
     run_id TEXT NOT NULL,

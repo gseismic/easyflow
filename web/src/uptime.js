@@ -20,12 +20,18 @@ export function localDay(date = new Date()) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
+function localDate(year, month, day) {
+  const date = new Date(0);
+  date.setFullYear(year, month, day);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
 export function dayBounds(day) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
   const start = new Date(`${day}T00:00:00`);
   if (!Number.isFinite(start.getTime()) || localDay(start) !== day) return null;
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
+  const end = localDate(start.getFullYear(), start.getMonth(), start.getDate() + 1);
   return { start, end };
 }
 
@@ -40,12 +46,11 @@ export function periodBounds(day, period = "day") {
   const bounds = dayBounds(day);
   if (!bounds || !uptimePeriods[period]) return null;
   if (period === "day") return bounds;
-  const start = new Date(bounds.start);
-  if (period === "week") start.setDate(start.getDate() - (start.getDay() + 6) % 7);
-  else start.setDate(1);
-  const end = new Date(start);
-  if (period === "week") end.setDate(end.getDate() + 7);
-  else end.setMonth(end.getMonth() + 1);
+  const date = bounds.start;
+  const start = localDate(date.getFullYear(), date.getMonth(),
+    period === "week" ? date.getDate() - (date.getDay() + 6) % 7 : 1);
+  const end = localDate(start.getFullYear(), start.getMonth() + (period === "month" ? 1 : 0),
+    period === "week" ? start.getDate() + 7 : 1);
   return { start, end };
 }
 
