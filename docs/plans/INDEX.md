@@ -46,3 +46,4 @@
 - 2026-11-15 14:44 Asia/Shanghai：[工作流基础搜索与筛选常驻修复结果](PLAN-20261115-006-model-unknown-visible-search-filters-OUTCOME.md)，已完成；基础工具始终可见，9 项前端测试、构建和浏览器回归通过，现有测试页面刷新后生效。
 - 2026-11-15 15:13 Asia/Shanghai：[uptime 日、周、月视图计划](PLAN-20261115-007-model-unknown-uptime-periods.md)，进行中；默认日视图，周月按日汇总，验证后先提交再继续 Airflow dashboard 调研。
 - 2026-11-15 15:25 Asia/Shanghai：[uptime 日、周、月视图结果](PLAN-20261115-007-model-unknown-uptime-periods-OUTCOME.md)，已完成；259 项后端、12 项前端、构建及浏览器/DST 验证通过，默认日并支持周月汇总及查看当天，准备提交。
+- 2026-11-15 15:26 Asia/Shanghai：[日、周、月视图提交依据](PLAN-20261115-007-model-unknown-uptime-periods-OUTCOME.md)，已提交 `7dd1ca82adf1618c864620265e1fe5768a3f051c`，未推送；本功能提交后继续 Airflow dashboard 调研。
