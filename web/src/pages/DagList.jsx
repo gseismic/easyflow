@@ -9,6 +9,7 @@ import WorkflowFilters, { appendWorkflowFilters, selectedFacetCount } from "../c
 import WorkflowLabels from "../components/WorkflowLabels";
 import UptimeControls from "../components/UptimeControls";
 import UptimeStrip from "../components/UptimeStrip";
+import SchedulerImpact from "../components/SchedulerImpact";
 import useUptime from "../components/useUptime";
 import { localDay } from "../uptime";
 
@@ -66,11 +67,10 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
   };
   return (
     <main className="page workflow-overview">
-      <div className="eyebrow">WORKFLOW OVERVIEW <span>／ 工作流</span></div>
-      <div className="page-title-row">
+      <div className="page-title-row page-heading-compact">
         <div>
           <h1>你的工作流</h1>
-          <p className="subtitle">从整体状态，到每一步的执行细节。</p>
+          <SchedulerImpact offline={!overview.error && overview.data && !overview.data.scheduler_running} />
         </div>
         <button className="button subtle" onClick={refresh}>↻ <span>刷新</span></button>
       </div>
@@ -79,9 +79,6 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
           更新失败，展示的可能是旧数据：{workflows.error || overview.error}{" "}
           <button className="link-button" onClick={refresh}>重试</button>
         </div>
-      )}
-      {!overview.error && overview.data && !overview.data.scheduler_running && (
-        <div className="notice warning">调度器离线，已创建的运行会等待调度器启动。</div>
       )}
       {overview.data?.issues?.length > 0 && (
         <div role="alert" className="notice error">

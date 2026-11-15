@@ -24,15 +24,21 @@ function WorkflowLink({ workflow, selected, onNavigate }) {
   </a>;
 }
 
-function ProjectBranch({ group, expanded, onToggle, query, selectedId, metadata, filters, view, route, onNavigate, complete }) {
+function ProjectBranch({ group, expanded, onToggle, query, selectedId, metadata, onLocateWorkflow, filters, view, route, onNavigate, complete }) {
   const [page, setPage] = useState(0);
   const [cursors, setCursors] = useState([null]);
   const disclosure = useRef(null);
   const groupId = useId();
   const workflows = usePolling(expanded ? navigationWorkflowsUrl(group, query, cursors[page]) : null);
   usePendingRefresh(workflows, workflows.data?.loading);
-  const rows = workflows.data?.dags || [];
   const groupKey = navigationGroupKey(group);
+  // 详情已确认新归属时，隐藏旧分组缓存中的同一入口，等待分组轮询更新。
+  const rows = (workflows.data?.dags || []).filter((item) => item.dag_id !== selectedId ||
+    !metadata || metadata.unavailable || navigationGroupKey(metadata) === groupKey);
+  const selectedWorkflow = rows.find((item) => item.dag_id === selectedId);
+  useLayoutEffect(() => {
+    if (selectedWorkflow) onLocateWorkflow(selectedWorkflow);
+  }, [selectedWorkflow, onLocateWorkflow]);
   const containsCurrent = metadata && !metadata.unavailable && navigationGroupKey(metadata) === groupKey;
   const pinned = containsCurrent && !rows.some((item) => item.dag_id === selectedId);
   const currentProject = route.name === "dags" && filters.projectKind === group.project_kind &&
@@ -86,6 +92,8 @@ export default function WorkspaceNavigation({ username, route, filters, view, hi
   const [draft, setDraft] = useState(saved.query);
   const [expanded, setExpanded] = useState(() => new Set(saved.expanded));
   const [mobile, setMobile] = useState(() => window.matchMedia("(max-width: 1000px)").matches);
+  const [locatedWorkflow, setLocatedWorkflow] = useState(null);
+  const locateWorkflow = useCallback((workflow) => setLocatedWorkflow(workflow), []);
   const scroll = useRef(null);
   const content = useRef(null);
   const lastScroll = useRef(saved.scrollTop);
@@ -96,7 +104,10 @@ export default function WorkspaceNavigation({ username, route, filters, view, hi
     ...state.current, scrollTop: lastScroll.current,
   }), [storageKey]);
   const selectedId = route.dagId || "";
-  const selectedKey = metadata && !metadata.unavailable ? navigationGroupKey(metadata) : "";
+  // 左树已有记录可在详情返回前定位；详情确认的归属优先。
+  const currentWorkflow = metadata && !metadata.unavailable ? metadata :
+    locatedWorkflow?.dag_id === selectedId ? locatedWorkflow : metadata;
+  const selectedKey = currentWorkflow && !currentWorkflow.unavailable ? navigationGroupKey(currentWorkflow) : "";
   const facetParams = new URLSearchParams();
   if (query) facetParams.set("q", query);
   const facets = useFacets(`/api/workflows/facets?${facetParams}`);
@@ -137,7 +148,7 @@ export default function WorkspaceNavigation({ username, route, filters, view, hi
     restored.current = true;
     lastScroll.current = scroll.current?.scrollTop ?? lastScroll.current;
   };
-  const hasSelectedGroup = metadata && !metadata.unavailable && groups.some((group) => navigationGroupKey(group) === selectedKey);
+  const hasSelectedGroup = currentWorkflow && !currentWorkflow.unavailable && groups.some((group) => navigationGroupKey(group) === selectedKey);
   return <dialog ref={dialogRef} id="workspace-navigation" className="workspace-navigation" aria-label="工作流导航"
     onCancel={(event) => { event.preventDefault(); onClose(); }}
     onClick={(event) => {
@@ -153,16 +164,15 @@ export default function WorkspaceNavigation({ username, route, filters, view, hi
       <a href={historyHref} onClick={onClose}
         aria-current={route.name.startsWith("history") && !route.fromWorkflow ? "page" : undefined}>运行历史</a>
     </nav>
-    <div className="navigation-search" role="search" aria-label="导航搜索">
-      <SearchBox label="搜索导航工作流" placeholder="查找工作流或项目" query={query} value={draft}
+    <div className="navigation-search" role="search" aria-label="导航搜索" title="仅筛选左侧导航，不改变右侧列表">
+      <SearchBox label="搜索导航工作流" placeholder="筛选左侧工作流或项目" query={query} value={draft}
         onDraftChange={setDraft} onSearch={(value) => { setQuery(value); setDraft(value); }} resetVersion={0} />
-      <p>仅筛选左侧导航</p>
     </div>
     <div className="navigation-scroll" ref={scroll} onScroll={(event) => {
       if (restored.current && dialogRef.current?.open) { lastScroll.current = event.currentTarget.scrollTop; persist(); }
     }} onWheel={rememberPosition} onPointerDown={rememberPosition} onKeyDown={rememberPosition}>
       <div ref={content} className="navigation-tree-content">
-        {selectedId && !hasSelectedGroup && <div className="navigation-pinned"><small>当前工作流</small>
+        {selectedId && currentWorkflow && !hasSelectedGroup && <div className="navigation-pinned"><small>当前工作流</small>
           <a className="navigation-workflow selected" href={workflowHref(selectedId)} title={selectedId} onClick={onClose}>
             <span className="navigation-workflow-name">{selectedId}</span>
           </a>{metadata?.unavailable && <p className="navigation-message">当前定义不可用，历史记录仍可查看。</p>}</div>}
@@ -174,7 +184,7 @@ export default function WorkspaceNavigation({ username, route, filters, view, hi
           <ul className="navigation-projects" aria-label="项目与工作流">{groups.map((group) => {
             const key = navigationGroupKey(group);
             return <ProjectBranch key={`${key}:${query}`} group={group} expanded={expanded.has(key)}
-              onToggle={(value) => toggle(key, value)} query={query} selectedId={selectedId} metadata={metadata}
+              onToggle={(value) => toggle(key, value)} query={query} selectedId={selectedId} metadata={currentWorkflow} onLocateWorkflow={locateWorkflow}
               filters={filters} view={view} route={route} onNavigate={onClose} complete={Boolean(facets.data?.complete && !facets.error)} />;
           })}</ul>
           {facets.data && !groups.length && <p className="navigation-message" role="status">{facets.data.pending ? "正在发现项目…" :

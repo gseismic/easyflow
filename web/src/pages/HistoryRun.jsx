@@ -35,20 +35,17 @@ export default function HistoryRun({ dagId, runId, requestedTaskId, requestedAtt
     (taskId ? { task_id: taskId } : null);
   return (
     <main className="page detail-page">
-      <a className="back-link" href={backHref}>
-        ← {backLabel}
-      </a>
-      <div className="detail-heading">
-        <div>
-          <div className="eyebrow">
-            RUN <span>／ 运行详情</span>
-          </div>
+      <div className="detail-heading compact-heading">
+        <div className="detail-identity-row">
+          <a className="back-link detail-back" href={backHref} aria-label={backLabel} title={backLabel}>←</a>
+          <div className="detail-identity">
           <h1 className="detail-title">{dagId}</h1>
           <div className="history-run-heading">
             <span className="mono" title={runId}>
               {runId}
             </span>
             {run.data && !run.error && <Status value={run.data.state} />}
+          </div>
           </div>
         </div>
         {dag.data && !dag.error && (

@@ -51,10 +51,7 @@ export default function HistoryList({ view, setView, filters: selection, onFilte
   };
   return (
     <main className="page">
-      <div className="eyebrow">
-        RUN HISTORY <span>／ 运行历史</span>
-      </div>
-      <div className="page-title-row">
+      <div className="page-title-row page-heading-compact">
         <div>
           <h1>运行历史</h1>
           <p className="subtitle">

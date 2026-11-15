@@ -55,3 +55,7 @@
 - 2026-11-15 18:34 Asia/Shanghai：[树形导航与左右工作台结果](PLAN-20261115-009-model-unknown-sidebar-dashboard-OUTCOME.md)，已完成；20 项前端、40 项相关后端、构建与三组浏览器验收通过，review-fix-loop 最后一轮覆盖完成且无待修复逻辑问题，准备提交。
 - 2026-11-15 19:36 Asia/Shanghai：[Web 巡查与 Review 修复计划](PLAN-20261115-010-model-unknown-web-review-fixes.md)，进行中；修复四项 P2 与窄屏滚动提示，保留指定报告及 19 张截图，补充边界、性能和浏览器回归。
 - 2026-11-15 19:49 Asia/Shanghai：[Web 巡查与 Review 修复结果](PLAN-20261115-010-model-unknown-web-review-fixes-OUTCOME.md)，已完成（WORKTREE）；四项 P2 与一项 P3 已修复，265 项后端、22 项前端、构建及浏览器回归通过，保留 19 张原始截图；75 万历史样本空日查询约 25 毫秒，默认 Ruff 既有诊断无新增。
+- 2026-11-15 21:22 Asia/Shanghai：[左侧导航切换闪烁修复计划](PLAN-20261115-011-model-unknown-navigation-stability.md)，进行中；消除待加载元数据造成的重复入口与 82px 跳动，稳定详情加载结构，并按哈夫曼思想只读评审界面主次。
+- 2026-11-15 21:35 Asia/Shanghai：[左侧导航切换闪烁修复结果](PLAN-20261115-011-model-unknown-navigation-stability-OUTCOME.md)，已完成（WORKTREE）；慢速切换最大位移 0px，七组浏览器回归、22 项前端、43 项相关后端测试及构建通过；哈夫曼评审建议仅在回复说明，未实施布局改版。
+- 2026-11-15 23:04 Asia/Shanghai：[监控界面优化计划](PLAN-20261115-012-model-unknown-monitoring-ui.md)，进行中；紧凑页头与时间图工具区、运行信息前移、统一刷新和导航密度，保留已有闪烁修复，并执行 review-fix-loop。
+- 2026-11-15 23:30 Asia/Shanghai：[监控界面优化结果](PLAN-20261115-012-model-unknown-monitoring-ui-OUTCOME.md)，已完成（WORKTREE）；时间格 y=625→351、运行选择 y=879→572，22 项前端、43 项相关后端、最终构建及浏览器回归通过，review-fix-loop 最后一轮无待修复逻辑问题，未提交或推送。

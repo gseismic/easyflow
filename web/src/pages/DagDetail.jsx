@@ -11,6 +11,7 @@ import TaskDetails from "../components/TaskDetails";
 import TaskLog from "../components/TaskLog";
 import TriggerDialog from "../components/TriggerDialog";
 import WorkflowUptime from "../components/WorkflowUptime";
+import WorkflowHeader from "../components/WorkflowHeader";
 import { workflowHref } from "../listRoute";
 import { runDetailUrl, taskLogUrl } from "../runApi";
 import WorkflowRunHistory from "./WorkflowRunHistory";
@@ -33,6 +34,7 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [refreshVersion, setRefreshVersion] = useState(0);
   const dag = detail.data;
   useEffect(() => {
     if (dag && !detail.error) onWorkflowMetadata?.(dag);
@@ -64,6 +66,7 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
     run.refresh();
     logs.refresh();
     refreshOverview();
+    setRefreshVersion((value) => value + 1);
   };
   const togglePause = async () => {
     setBusy(true);
@@ -103,13 +106,16 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
   };
   if (!dag)
     return (
-      <main className="page">
-        <a className="back-link" href={backHref}>
-          ← 所有工作流
-        </a>
-        <div className="empty">
-          {detail.error ? `加载失败：${detail.error}` : "正在加载工作流…"}
-        </div>
+      <main className="page detail-page" aria-busy={!detail.error}>
+        <WorkflowHeader dagId={dagId} tab={tab} isAdmin={isAdmin} historyView={historyView} backHref={backHref} />
+        <section className="card detail-load-state">
+          {detail.error ? <div className="notice error" role="alert">
+            加载失败：{detail.error}{" "}<button className="link-button" onClick={detail.refresh}>重试加载工作流</button>
+          </div> : <>
+            <p role="status">正在加载工作流…</p>
+            <div className="detail-load-placeholder" aria-hidden="true"><div /><div /><div /></div>
+          </>}
+        </section>
       </main>
     );
   const selectedTask =
@@ -128,24 +134,9 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
     : Object.fromEntries(dag.tasks.map((task) => [task.task_id, null]));
   return (
     <main className="page detail-page">
-      <a className="back-link" href={backHref}>
-        ← 所有工作流
-      </a>
-      <div className="detail-heading">
-        <div>
-          <div className="eyebrow">
-            WORKFLOW <span>／ 工作流详情</span>
-          </div>
-          <h1 className="detail-title">{dag.dag_id}</h1>
-          <div className="meta">
-            <span>{dag.paused ? "● 已暂停" : "● 已启用"}</span>
-            <span>
-              调度：<b className="mono">{dag.schedule || "手动触发"}</b>
-            </span>
-            <span>{dag.task_count} 个任务</span>
-          </div>
-        </div>
-          <div className="actions">
+      <WorkflowHeader dagId={dagId} dag={dag} tab={tab} isAdmin={isAdmin} historyView={historyView} backHref={backHref}
+        schedulerOffline={!detail.error && !dag.scheduler_running}
+        actions={<>
             <button className="button subtle" onClick={refresh}>↻ 刷新</button>
             {isAdmin && <>
             <button
@@ -156,22 +147,16 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
               {dag.paused ? "恢复调度" : "暂停调度"}
             </button>
             <button
-              className="button primary"
+              className="button subtle"
               onClick={() => setDialog("trigger")}
             >
               ＋ 触发运行
             </button>
             </>}
-          </div>
-      </div>
+        </>}>
       {detail.error && (
         <div role="alert" className="notice error">
           工作流信息更新失败：{detail.error}
-        </div>
-      )}
-      {!detail.error && !dag.scheduler_running && (
-        <div className="notice warning">
-          调度器离线，运行会在调度器启动后继续。
         </div>
       )}
       {notice && (
@@ -187,26 +172,8 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
           {error}
         </div>
       )}
-      <nav className="detail-tabs" aria-label="工作流视图">
-        {[
-          ["run", "概览"],
-          ["tasks", "任务"],
-          ["history", "运行历史"],
-          ["logs", "日志"],
-          ["schedule", "调度详情"],
-          ...(isAdmin ? [["source", "源码"]] : []),
-        ].map(([value, label]) => (
-          <a
-            key={value}
-            className={tab === value ? "detail-tab active" : "detail-tab"}
-            aria-current={tab === value ? "page" : undefined}
-            href={workflowHref(dagId, value, historyView)}
-          >
-            {label}
-          </a>
-        ))}
-      </nav>
-      {(tab === "run" || tab === "history") && <WorkflowUptime dagId={dagId} />}
+      </WorkflowHeader>
+      {(tab === "run" || tab === "history") && <WorkflowUptime dagId={dagId} refreshVersion={refreshVersion} />}
       {tab === "history" && (
         <WorkflowRunHistory dagId={dagId} view={historyView} setView={setHistoryView} />
       )}
