@@ -97,6 +97,7 @@ async original => {
       const date = new Date(iso);
       return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     }, definition.runs[0].start_date || definition.runs[0].queued_at);
+    await main.getByRole('button', { name: '日视图', exact: true }).click();
     await main.getByLabel('运行时段日期', { exact: true }).fill(fixtureDay);
     await main.locator('button.uptime-failed').first().click();
     await main.locator('.uptime-failure-log').waitFor();
@@ -112,6 +113,7 @@ async original => {
     await main.getByRole('region', { name: '本工作流的运行历史', exact: true }).waitFor();
     await tab('概览').click();
     await ready();
+    await main.getByRole('button', { name: '日视图', exact: true }).click();
     await main.getByLabel('运行时段日期', { exact: true }).fill(fixtureDay);
     await main.locator('button.uptime-failed').first().click();
     await main.getByRole('link', { name: '查看完整日志 →', exact: true }).click();

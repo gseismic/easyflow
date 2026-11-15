@@ -67,8 +67,9 @@ def workflow_facets(
 def uptime(
     request: Request,
     dag_id: Annotated[list[str], Query(min_length=1, max_length=100)],
-    start_at: datetime,
-    end_at: datetime,
+    start_at: datetime | None = None,
+    end_at: datetime | None = None,
+    lookback_hours: Annotated[int | None, Query(ge=1, le=168)] = None,
     granularity: Literal["half_hour", "day"] = "half_hour",
     timezone_name: Annotated[str, Query(alias="timezone", max_length=100)] = "UTC",
 ):
@@ -77,6 +78,7 @@ def uptime(
         dag_ids=dag_id,
         start_at=start_at,
         end_at=end_at,
+        lookback_hours=lookback_hours,
         granularity=granularity,
         timezone_name=timezone_name,
     )

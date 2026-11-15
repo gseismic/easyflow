@@ -1,5 +1,7 @@
 # easyflow 会话交接
 
+最新补充见第 11 节（2026-11-16 01:54 Asia/Shanghai）：本轮已将默认 uptime 改为最近小时并加入周/月原位展开日图；下文前 10 节保留历史交接，默认日视图等旧描述已由第 11 节更新。
+
 - 创建时间：2026-11-15 16:43 Asia/Shanghai。
 - 创建者：Codex（基于 GPT-6；环境未提供可核实的完整模型 ID，标记为 `model-unknown`）。
 - 项目根目录：`/Users/mac/pai-studio-fin/library/easyflow`。
@@ -218,3 +220,21 @@ uv run easyflow web \
 4. 保持基础搜索筛选常驻、日视图默认、错误历史保留、时区与 DST 语义，不重新引入已被用户否定的折叠设计。
 
 不需要继续本轮实现，也不需要重新生成 A1 或重跑所有验证来恢复上下文。
+
+## 11. 2026-11-16 01:54 最近小时与周月展开交接
+
+- 更新者：Codex（基于 GPT-6；完整模型 ID 未提供，使用 model-unknown）。
+- 本轮来源基准：`9eece2edc1759cb2c8d96675cb0fae8fd22fa260`，主题与设置已在该提交完成；本节记录本轮 WORKTREE，相关文件及验收版本见下方结果文档，最终提交号查 Git 记录。
+- 用户新要求已完成：凌晨能看前一晚的最近 X 小时；周/月选一天，在原汇总下展开更紧凑的当天 uptime。
+
+默认现在是最近 24 小时，允许 1–168 小时并保存在当前浏览器，列表与详情共用；API 使用服务端 now 的相对范围，首尾裁剪，实际跨日时间可见。代码：`web/src/components/useUptimeView.js:6`、`src/easyflow/web/uptime.py:43`。固定日/周/月仍可选择，DST 规则保留。这个新默认覆盖第 2、10 节的默认日视图描述。
+
+周/月选非未来日期会原位展开当天图，20px 格子，可收起、切日、独立重试，顶部刷新同步日图；红格仍读取原始失败尝试。代码：`web/src/components/UptimeStrip.jsx:88`、`web/src/components/UptimeDayDetail.jsx:5`、`web/src/workspace.css:167`。未来日不请求展开，父周/月保持。
+
+验证：37 项前端、63 项相关 Web 后端、针对性 Ruff、构建、管理员及真实 viewer 的实际示例均通过；导航、监控布局、主题和原有预览/日志浏览器回归通过。最后一轮无待修复逻辑问题。本机服务 8790（examples）和 8791（既有隔离演示）已重启加载新 API，均无 scheduler，未触发业务运行。最终资源为 `index-49jTBR6E.js`、`index-CIm2VWKM.css`，旧资源保留。
+
+一次磁盘不足导致截图失败已通过清理本轮已结束测试的临时目录解决，随后必要回归全部跑通。没有清理其他任务目录；日夜和 320/390/768/1440px 已检查，其他浏览器内核未单独验证。
+
+本轮没有待继续实现的授权事项，也没有新增长期问题；既有问题和后续事项仍以 [KNOWN-ISSUES](KNOWN-ISSUES.md)、[TODOS](TODOS.md) 为准。邮件告警尚属后续范围。
+
+关联文档：[计划](plans/PLAN-20261116-001-model-unknown-rolling-uptime.md)、[结果](plans/PLAN-20261116-001-model-unknown-rolling-uptime-OUTCOME.md)、[设计](design/easyflow-20261116-rolling-uptime.md)。本轮本地提交，不推送。

@@ -61,3 +61,5 @@
 - 2026-11-15 23:30 Asia/Shanghai：[监控界面优化结果](PLAN-20261115-012-model-unknown-monitoring-ui-OUTCOME.md)，已完成（WORKTREE）；时间格 y=625→351、运行选择 y=879→572，22 项前端、43 项相关后端、最终构建及浏览器回归通过，review-fix-loop 最后一轮无待修复逻辑问题，未提交或推送。
 - 2026-11-15 23:50 Asia/Shanghai：[主题与设置计划](PLAN-20261115-013-model-unknown-theme-settings.md)，进行中；白天/黑夜/自动、自定义切换时间、统一设置入口、完整配色与真实示例验证，完成后本地提交。
 - 2026-11-16 00:32 Asia/Shanghai：[主题与设置结果](PLAN-20261115-013-model-unknown-theme-settings-OUTCOME.md)，已完成（WORKTREE）；33 项前端、43 项相关后端、构建、真实跨分钟切换与只读账号及既有界面回归通过，循环审查无待修复逻辑问题，准备本地提交。
+- 2026-11-16 01:32 Asia/Shanghai：[最近小时与周月展开计划](PLAN-20261116-001-model-unknown-rolling-uptime.md)，进行中；默认最近 24 小时、可配置小时数，周月选一天原位展开紧凑半小时图，验证后本地提交。
+- 2026-11-16 01:54 Asia/Shanghai：[最近小时与周月展开结果](PLAN-20261116-001-model-unknown-rolling-uptime-OUTCOME.md)，已完成（WORKTREE）；37 项前端、63 项相关后端、Ruff、构建、管理员/真实只读示例及界面回归通过，循环复查无待修复逻辑问题，准备本地提交。

@@ -113,7 +113,7 @@ async (page) => {
     await graph.press("ArrowRight");
     await page.waitForFunction(() => document.querySelector(".graph-scroll").scrollLeft > 0);
     await page.goto(`${origin}/#/`);
-    await page.getByText("左右滑动或使用方向键查看全天时段", { exact: true }).first().waitFor();
+    await page.getByText("左右滑动或使用方向键查看完整时段", { exact: true }).first().waitFor();
     const firstSlot = page.locator(".uptime-slots").first().locator("button").first();
     await firstSlot.focus();
     await firstSlot.press("End");

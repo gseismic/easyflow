@@ -1,13 +1,13 @@
-import { useEffect, useRef, useState } from "react";
-import { localDay } from "../uptime";
+import { useEffect, useRef } from "react";
 import UptimeControls from "./UptimeControls";
 import UptimeStrip from "./UptimeStrip";
 import useUptime from "./useUptime";
+import useUptimeView from "./useUptimeView";
+import UptimeDayDetail from "./UptimeDayDetail";
 
 export default function WorkflowUptime({ dagId, refreshVersion = 0 }) {
-  const [day, setDay] = useState(() => localDay());
-  const [period, setPeriod] = useState("day");
-  const uptime = useUptime([dagId], day, period);
+  const { day, setDay, period, setPeriod, hours, changeHours, warning, openDay } = useUptimeView();
+  const uptime = useUptime([dagId], day, period, hours);
   const previousRefresh = useRef(refreshVersion);
   useEffect(() => {
     if (previousRefresh.current !== refreshVersion) {
@@ -15,12 +15,12 @@ export default function WorkflowUptime({ dagId, refreshVersion = 0 }) {
       uptime.refresh();
     }
   }, [refreshVersion, uptime.refresh]);
-  const openDay = (value) => { setDay(value); setPeriod("day"); };
   return (
     <section className="card uptime-card" aria-label="工作流运行时段">
-      <UptimeControls heading day={day} onChange={setDay} period={period} onPeriodChange={setPeriod} />
+      <UptimeControls heading day={day} onChange={setDay} period={period} onPeriodChange={setPeriod} hours={hours} onHoursChange={changeHours} warning={warning} range={uptime.data} />
       {uptime.error && <div className="notice error" role="alert">运行时段更新失败{uptime.data ? "，当前显示旧数据" : ""}：{uptime.error}{" "}<button className="link-button" onClick={uptime.refresh}>重试</button></div>}
-      <div className="uptime-detail-chart"><UptimeStrip key={`${period}:${day}`} dagId={dagId} slots={uptime.data?.workflows?.[dagId]} error={uptime.error} period={period} onOpenDay={openDay} /></div>
+      <div className="uptime-detail-chart"><UptimeStrip key={`${period}:${day}:${hours}`} dagId={dagId} slots={uptime.data?.workflows?.[dagId]} error={uptime.error} period={period} onOpenDay={openDay}
+        renderDay={(value, onClose, id) => <UptimeDayDetail key={value} dagId={dagId} day={value} onClose={onClose} id={id} refreshVersion={refreshVersion} />} /></div>
     </section>
   );
 }

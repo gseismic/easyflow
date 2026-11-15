@@ -1,6 +1,64 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { dayBounds, failureKey, failureRunHref, localDay, periodBounds, periodRange, shiftDay, shiftPeriod, slotDescription, uptimeFailuresUrl, uptimeLogPreview, uptimeRunHref, uptimeUrl } from "../src/uptime.js";
+import { dailyUptime, dayBounds, failureKey, failureRunHref, localDay, periodBounds, periodRange, readRecentHours, recentHoursKey, saveRecentHours, shiftDay, shiftPeriod, slotDescription, uptimeFailuresUrl, uptimeLogPreview, uptimeRunHref, uptimeSlotKey, uptimeTicks, uptimeUrl, validRecentHours } from "../src/uptime.js";
+
+test("最近小时查询不依赖日历或浏览器时间，排序并保留特殊 ID", () => {
+  const url = new URL(uptimeUrl(["b", "a/中文?+", "b"], "", "recent", 72), "http://localhost");
+  assert.deepEqual(url.searchParams.getAll("dag_id"), ["a/中文?+", "b"]);
+  assert.equal(url.searchParams.get("lookback_hours"), "72");
+  assert.equal(url.searchParams.has("start_at"), false);
+  assert.equal(url.searchParams.has("end_at"), false);
+  assert.equal(uptimeUrl([], "", "recent"), null);
+  assert.equal(uptimeUrl(["a"], "", "recent", 169), null);
+});
+
+test("小时数校验与保存降级不覆盖有效偏好", () => {
+  let value = null;
+  const storage = { getItem: key => key === recentHoursKey ? value : null, setItem: (key, next) => { if (key === recentHoursKey) value = next; } };
+  assert.equal(readRecentHours(storage), 24);
+  for (const hours of [1, 24, 168]) {
+    assert.equal(validRecentHours(hours), true);
+    assert.equal(saveRecentHours(storage, hours), true);
+    assert.equal(readRecentHours(storage), hours);
+  }
+  for (const invalid of [0, -1, 169, 1.5, "", "bad", "1e2", null]) {
+    assert.equal(validRecentHours(invalid), false);
+    assert.equal(saveRecentHours(storage, invalid), false);
+    assert.equal(readRecentHours(storage), 168);
+  }
+  value = "bad json";
+  assert.equal(readRecentHours(storage), 24);
+  assert.equal(readRecentHours({ getItem() { throw new Error("denied"); } }), 24);
+  assert.equal(saveRecentHours(null, 12), false);
+});
+
+test("滚动窗口保留半小时桶标识，最近说明仍为时间段", () => {
+  const first = { start_at: "2026-11-15T16:01:00Z", end_at: "2026-11-15T16:30:00Z", state: "failed" };
+  assert.equal(uptimeSlotKey(first, "recent"), uptimeSlotKey({ ...first, start_at: "2026-11-15T16:02:00Z" }, "recent"));
+  assert.notEqual(uptimeSlotKey(first, "day"), uptimeSlotKey({ ...first, start_at: "2026-11-15T16:02:00Z" }, "day"));
+  assert.equal(dailyUptime("recent"), false);
+  assert.equal(dailyUptime("week"), true);
+  assert.equal(dailyUptime("month"), true);
+  assert.match(slotDescription(first, "recent"), /\d{2}:\d{2} — .*?\d{2}:\d{2}/);
+});
+
+test("短滚动窗口坐标不错误标记次日，跨午夜标出日期", () => {
+  const original = process.env.TZ;
+  process.env.TZ = "Asia/Shanghai";
+  try {
+    const slots = [{ start_at: "2026-11-15T15:12:00Z", end_at: "2026-11-15T15:30:00Z" }, { start_at: "2026-11-15T15:30:00Z", end_at: "2026-11-15T16:00:00Z" }, { start_at: "2026-11-15T16:00:00Z", end_at: "2026-11-15T16:12:00Z" }];
+    const ticks = uptimeTicks(slots, "recent");
+    assert.equal(ticks.length, 2);
+    assert.match(ticks[0].label, /11\/15.*23:12/);
+    assert.match(ticks[1].label, /11\/16.*00:12/);
+    assert.doesNotMatch(ticks[1].label, /\+1/);
+    assert.equal(uptimeTicks([], "day").length, 0);
+    assert.match(uptimeTicks(slots, "day").at(-1).label, /11-16/);
+  } finally {
+    if (original === undefined) delete process.env.TZ;
+    else process.env.TZ = original;
+  }
+});
 
 test("本地日期转为 UTC 范围，跨月切换保留特殊工作流 ID", () => {
   const original = process.env.TZ;

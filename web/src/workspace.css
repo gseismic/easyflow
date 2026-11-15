@@ -154,6 +154,19 @@
 .uptime-date-navigation .button { flex: none; min-width: 44px; padding: 0; }
 .workspace-main .uptime-date label { flex: none; }
 .uptime-resolution { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.uptime-recent-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.workspace-main .uptime-recent-form input { width: 72px; min-height: 44px; }
+.uptime-recent-form small { font-size: 11px; margin: 0; }
+.uptime-storage-warning { font-size: 12px; color: var(--warning-fg); }
+.uptime-recent-track { min-width: max(576px, calc(var(--slot-count) * 12px)); }
+.uptime-day-detail { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.uptime-day-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.uptime-day-heading h3 { margin: 0; color: var(--ink); font-size: 12px; }
+.uptime-day-detail .uptime-track { min-width: 480px; }
+.uptime-day-detail .uptime-slots { gap: 2px; }
+.uptime-day-detail .uptime-slot { height: 20px; border-radius: 3px; font-size: 10px; }
+.uptime-day-detail .uptime-caption { font-size: 11px; }
+.workspace-main .uptime-day-detail .notice { margin: 8px 0; }
 .workspace-main .uptime-legend { margin-top: 8px; min-height: 20px; }
 .workspace-main .uptime-help { flex-basis: auto; margin: 0; font-size: 12px; }
 .workspace-main .uptime-help[open] { flex-basis: 100%; }

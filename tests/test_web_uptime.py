@@ -469,6 +469,18 @@ def test_uptime_api_auth_viewer_timezone_and_range_validation(tmp_path):
         data = result.json()
         assert data["start_at"] == "2026-01-01T16:00:00+00:00"
         assert len(data["workflows"]["a/中文?+"]) == 48
+        recent = client.get("/api/workflows/uptime", params={"dag_id": ["a/中文?+", "demo"], "lookback_hours": 24})
+        assert recent.status_code == 200
+        recent_data = recent.json()
+        assert recent_data["lookback_hours"] == 24
+        assert recent_data["end_at"] == recent_data["as_of"]
+        assert len(recent_data["workflows"]["a/中文?+"]) in (48, 49)
+        for value in [0, 169, "bad", "1.5"]:
+            assert client.get("/api/workflows/uptime", params={"dag_id": "demo", "lookback_hours": value}).status_code == 422
+        for patch in [{"lookback_hours": 24}, {"start_at": None, "end_at": None, "lookback_hours": 24, "granularity": "day"}]:
+            mixed = {**params, **patch}
+            assert client.get("/api/workflows/uptime", params={key: value for key, value in mixed.items() if value is not None}).status_code == 400
+        assert client.get("/api/workflows/uptime", params={"dag_id": "demo"}).status_code == 400
         for patch in (
             {"start_at": "2026-01-02T00:00:00"},
             {"end_at": params["start_at"]},
