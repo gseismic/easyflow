@@ -112,6 +112,7 @@ async original => {
     await main.getByRole('region', { name: '本工作流的运行历史', exact: true }).waitFor();
     await tab('概览').click();
     await ready();
+    await main.getByLabel('运行时段日期', { exact: true }).fill(fixtureDay);
     await main.locator('button.uptime-failed').first().click();
     await main.getByRole('link', { name: '查看完整日志 →', exact: true }).click();
     await main.locator('.log-toolbar select').waitFor();

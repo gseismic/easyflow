@@ -5,3 +5,4 @@
 - [TD-20261115-1708-001](todos/TD-20261115-1708-001-period-statistics.md)：所选日周月的运行与错误统计；待评估；最后更新 2026-11-15 17:08 Asia/Shanghai。
 - [TD-20261115-1708-002](todos/TD-20261115-1708-002-task-run-matrix.md)：任务与最近运行矩阵；待评估；最后更新 2026-11-15 17:08 Asia/Shanghai。
 - [TD-20261115-1708-003](todos/TD-20261115-1708-003-duration-comparison.md)：最近运行的排队与执行耗时对比；待评估；最后更新 2026-11-15 17:08 Asia/Shanghai。
+- [TD-20261115-2350-001](todos/TD-20261115-2350-001-alert-notifications.md)：告警通知与邮件设置；待评估；最后更新 2026-11-15 23:50 Asia/Shanghai。

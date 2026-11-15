@@ -37,7 +37,7 @@ export default function Graph({ tasks, states, selected, onSelect }) {
               refY="3"
               orient="auto"
             >
-              <path d="M0,0 L0,6 L6,3 z" fill="#aab9b2" />
+              <path d="M0,0 L0,6 L6,3 z" fill="var(--graph-edge)" />
             </marker>
           </defs>
           {tasks.flatMap((task) =>
@@ -52,7 +52,7 @@ export default function Graph({ tasks, states, selected, onSelect }) {
                   key={`${id}-${task.task_id}`}
                   d={`M${start} ${from.y + 34} C${start + 24} ${from.y + 34}, ${end - 24} ${to.y + 34}, ${end} ${to.y + 34}`}
                   fill="none"
-                  stroke="#aab9b2"
+                  stroke="var(--graph-edge)"
                   strokeWidth="1.5"
                   markerEnd="url(#arrow)"
                 />

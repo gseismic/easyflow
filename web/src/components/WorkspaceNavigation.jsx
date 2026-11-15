@@ -192,5 +192,8 @@ export default function WorkspaceNavigation({ username, route, filters, view, hi
         </>}
       </div>
     </div>
+    <nav className="navigation-settings" aria-label="工作台设置">
+      <a href="#/settings" aria-current={route.name === "settings" ? "page" : undefined} onClick={onClose}><span aria-hidden="true">⚙</span>设置</a>
+    </nav>
   </dialog>;
 }

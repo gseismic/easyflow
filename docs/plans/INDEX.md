@@ -59,3 +59,5 @@
 - 2026-11-15 21:35 Asia/Shanghai：[左侧导航切换闪烁修复结果](PLAN-20261115-011-model-unknown-navigation-stability-OUTCOME.md)，已完成（WORKTREE）；慢速切换最大位移 0px，七组浏览器回归、22 项前端、43 项相关后端测试及构建通过；哈夫曼评审建议仅在回复说明，未实施布局改版。
 - 2026-11-15 23:04 Asia/Shanghai：[监控界面优化计划](PLAN-20261115-012-model-unknown-monitoring-ui.md)，进行中；紧凑页头与时间图工具区、运行信息前移、统一刷新和导航密度，保留已有闪烁修复，并执行 review-fix-loop。
 - 2026-11-15 23:30 Asia/Shanghai：[监控界面优化结果](PLAN-20261115-012-model-unknown-monitoring-ui-OUTCOME.md)，已完成（WORKTREE）；时间格 y=625→351、运行选择 y=879→572，22 项前端、43 项相关后端、最终构建及浏览器回归通过，review-fix-loop 最后一轮无待修复逻辑问题，未提交或推送。
+- 2026-11-15 23:50 Asia/Shanghai：[主题与设置计划](PLAN-20261115-013-model-unknown-theme-settings.md)，进行中；白天/黑夜/自动、自定义切换时间、统一设置入口、完整配色与真实示例验证，完成后本地提交。
+- 2026-11-16 00:32 Asia/Shanghai：[主题与设置结果](PLAN-20261115-013-model-unknown-theme-settings-OUTCOME.md)，已完成（WORKTREE）；33 项前端、43 项相关后端、构建、真实跨分钟切换与只读账号及既有界面回归通过，循环审查无待修复逻辑问题，准备本地提交。

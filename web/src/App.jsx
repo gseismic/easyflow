@@ -8,10 +8,13 @@ import DagDetail from "./pages/DagDetail";
 import HistoryList from "./pages/HistoryList";
 import HistoryRun from "./pages/HistoryRun";
 import Login from "./pages/Login";
+import Settings from "./pages/Settings";
+import useAppearance from "./useAppearance";
 import { emptyFilters, listHref, readListState, sameFilters, workflowHref } from "./listRoute";
 
 function currentRoute() {
   const [path, query = ""] = window.location.hash.split("?", 2);
+  if (path === "#/settings") return { name: "settings" };
   if (path === "#/history") {
     return { name: "history", dagId: new URLSearchParams(query).get("dag_id") || "" };
   }
@@ -63,7 +66,7 @@ function initialView(page) {
   return makeView(readListState(currentPage === page ? window.location.hash : "", page));
 }
 
-function Workspace({ session, onLogout }) {
+function Workspace({ session, onLogout, appearance }) {
   const [route, setRoute] = useState(currentRoute);
   const [navigationOpen, setNavigationOpen] = useState(false);
   const [navigationWorkflow, setNavigationWorkflow] = useState(null);
@@ -252,7 +255,7 @@ function Workspace({ session, onLogout }) {
           退出失败：{logoutError}
         </div>
       )}
-      {route.name === "dag" ? (
+      {route.name === "settings" ? <Settings appearance={appearance} /> : route.name === "dag" ? (
         <DagDetail
           key={route.dagId}
           dagId={route.dagId}
@@ -305,6 +308,7 @@ function Workspace({ session, onLogout }) {
 }
 
 export default function App() {
+  const appearance = useAppearance();
   const [session, setSession] = useState(undefined);
   const [startupError, setStartupError] = useState("");
   useEffect(() => {
@@ -346,6 +350,7 @@ export default function App() {
   return (
     <Workspace
       session={session}
+      appearance={appearance}
       onLogout={() => {
         setCsrfToken("");
         setSession(null);

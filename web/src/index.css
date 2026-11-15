@@ -1,8 +1,8 @@
 :root {
   font-family:
     "DM Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
-  color: #24362f;
-  background: #f5f7f4;
+  color: var(--ink);
+  background: var(--canvas);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   --ink: #20362c;
@@ -24,7 +24,7 @@
   gap: 12px 24px;
   padding: 16px 28px;
   border-top: 1px solid var(--border);
-  background: #f8faf8;
+  background: var(--surface);
 }
 .uptime-date,
 .uptime-legend,
@@ -70,7 +70,7 @@
 }
 .uptime-period button[aria-pressed="true"] {
   color: var(--green);
-  background: #e9f0ea;
+  background: var(--surface-accent);
   font-weight: 600;
 }
 .uptime-range { color: var(--muted); font-size: 12px; }
@@ -132,7 +132,7 @@
   padding: 0;
   font-size: 12px;
   font-weight: 700;
-  color: white;
+  color: var(--on-primary);
 }
 .uptime-daily-slot {
   height: 44px;
@@ -161,8 +161,8 @@
 .uptime-running { background: var(--uptime-running); }
 .uptime-waiting { background: var(--uptime-waiting); }
 .uptime-failed { background: var(--uptime-failed); }
-.uptime-idle { background: #dce5df; border-color: #ccd7cf; }
-.uptime-future { background: #f5f7f4; border-color: #dce5df; border-style: dashed; }
+.uptime-idle { background: var(--idle-bg); border-color: var(--border-strong); }
+.uptime-future { background: var(--canvas); border-color: var(--border); border-style: dashed; }
 .uptime-axis {
   position: relative;
   height: 24px;
@@ -212,9 +212,9 @@
   max-width: 100%;
   margin-top: 16px;
   padding: 16px;
-  border: 1px solid #e5c9c5;
+  border: 1px solid var(--danger-border);
   border-radius: 8px;
-  background: #fdf9f8;
+  background: var(--danger-soft);
   font-size: 12px;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -265,7 +265,7 @@
 }
 .uptime-failure-item:last-child { border-bottom: 0; }
 .uptime-failure-item:hover,
-.uptime-failure-item[aria-pressed="true"] { border-left-color: var(--uptime-failed); background: #f8edeb; }
+.uptime-failure-item[aria-pressed="true"] { border-left-color: var(--uptime-failed); background: var(--danger-selected); }
 .uptime-failure-item span,
 .uptime-failure-item small,
 .uptime-failure-title > span,
@@ -273,7 +273,7 @@
 .uptime-failure-title h4 > span { display: block; margin-top: 4px; }
 .uptime-failure-pagination { margin-top: 8px; gap: 8px; }
 .uptime-failure-pagination > span { flex-basis: 100%; color: var(--muted); }
-.uptime-failure-summary { margin-top: 16px; color: #883b33; }
+.uptime-failure-summary { margin-top: 16px; color: var(--danger-fg); }
 .uptime-failure-summary p { margin: 8px 0; color: inherit; white-space: pre-wrap; }
 .uptime-failure-times { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 16px 0; }
 .uptime-failure-times dt { margin-bottom: 4px; color: var(--muted); }
@@ -352,7 +352,7 @@ input:focus-visible,
 textarea:focus-visible,
 select:focus-visible,
 summary:focus-visible {
-  outline: 3px solid #8bc0a3;
+  outline: 3px solid var(--focus-ring);
   outline-offset: 2px;
 }
 .topbar {
@@ -361,14 +361,14 @@ summary:focus-visible {
   display: flex;
   align-items: center;
   gap: 24px;
-  background: #fff;
+  background: var(--paper);
   border-bottom: 1px solid var(--border);
 }
 .brand {
   display: inline-flex;
   align-items: center;
   gap: 9px;
-  color: #213b2d;
+  color: var(--ink);
   font-size: 20px;
   letter-spacing: -0.8px;
 }
@@ -377,16 +377,16 @@ summary:focus-visible {
   place-items: center;
   width: 32px;
   height: 32px;
-  background: #1b6446;
+  background: var(--primary-bg);
   border-radius: 9px;
-  color: white;
+  color: var(--on-primary);
   font:
     700 22px Georgia,
     serif;
   line-height: 1;
 }
 .brand-mark span {
-  color: #b8dbbf;
+  color: var(--brand-dot);
   position: absolute;
   margin: 11px 0 0 15px;
 }
@@ -396,7 +396,7 @@ summary:focus-visible {
   background: var(--border);
 }
 .header-label {
-  color: #607568;
+  color: var(--muted);
   font-size: 13px;
   font-weight: 600;
 }
@@ -407,8 +407,8 @@ summary:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: #8b5e27;
-  background: #fbf4e7;
+  color: var(--warning-fg);
+  background: var(--warning-bg);
   border-radius: 100px;
   padding: 8px 12px;
   font-size: 12px;
@@ -416,8 +416,8 @@ summary:focus-visible {
   white-space: nowrap;
 }
 .scheduler-badge.online {
-  color: #286a49;
-  background: #edf7ef;
+  color: var(--success-fg);
+  background: var(--success-bg);
 }
 .status-dot {
   display: inline-block;
@@ -433,14 +433,14 @@ summary:focus-visible {
   padding: 56px 32px 40px;
 }
 .eyebrow {
-  color: #587460;
+  color: var(--muted);
   font:
     600 11px "IBM Plex Mono",
     monospace;
   letter-spacing: 0.13em;
 }
 .eyebrow span {
-  color: #63776a;
+  color: var(--muted);
   letter-spacing: 0.03em;
   font-family: inherit;
 }
@@ -456,14 +456,14 @@ h1 {
   font-size: clamp(28px, 3vw, 38px);
   line-height: 1.2;
   letter-spacing: -0.04em;
-  color: #20382b;
+  color: var(--ink);
   overflow-wrap: anywhere;
 }
 h2 {
   margin: 0;
   font-size: 16px;
   line-height: 1.4;
-  color: #273d31;
+  color: var(--ink);
 }
 p {
   color: var(--muted);
@@ -487,20 +487,20 @@ p {
   white-space: nowrap;
 }
 .button.primary {
-  background: #1c6748;
-  color: #fff;
-  box-shadow: 0 3px 8px #1c67481c;
+  background: var(--primary-bg);
+  color: var(--on-primary);
+  box-shadow: 0 3px 8px var(--shadow-color);
 }
 .button.primary:hover:not(:disabled) {
-  background: #15533a;
+  background: var(--primary-hover);
 }
 .button.subtle {
-  background: #fff;
-  border-color: #dbe5de;
-  color: #40584a;
+  background: var(--paper);
+  border-color: var(--border);
+  color: var(--muted);
 }
 .button.subtle:hover:not(:disabled) {
-  background: #f3f8f4;
+  background: var(--surface-hover);
 }
 .button.small {
   min-height: 44px;
@@ -509,8 +509,8 @@ p {
 .summary-strip {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  background: #e9f0ea;
-  border: 1px solid #dfe9e1;
+  background: var(--surface-accent);
+  border: 1px solid var(--border);
   border-radius: 12px;
   margin: 32px 0 24px;
   padding: 22px 0;
@@ -521,13 +521,13 @@ p {
   justify-content: space-between;
   padding: 0 32px;
   gap: 16px;
-  border-right: 1px solid #d6e3d9;
+  border-right: 1px solid var(--border);
 }
 .summary-strip > div:last-child {
   border-right: 0;
 }
 .summary-strip span {
-  color: #5e7767;
+  color: var(--muted);
   font-size: 13px;
   font-weight: 600;
 }
@@ -535,11 +535,11 @@ p {
   font:
     500 28px "IBM Plex Mono",
     monospace;
-  color: #254d35;
+  color: var(--green);
 }
 .summary-strip .danger-text,
 .danger-text {
-  color: #a54037;
+  color: var(--danger-fg);
 }
 .card {
   background: var(--paper);
@@ -562,12 +562,12 @@ p {
 }
 .count,
 .graph-hint {
-  color: #607568;
+  color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
 }
 .count {
-  background: #f1f5f2;
+  background: var(--surface);
   border-radius: 100px;
   padding: 6px 10px;
 }
@@ -582,8 +582,8 @@ table {
   font-size: 13px;
 }
 thead {
-  background: #f8faf8;
-  color: #607568;
+  background: var(--surface);
+  color: var(--muted);
   font-size: 11px;
 }
 th {
@@ -593,18 +593,18 @@ th {
 }
 td {
   padding: 17px 28px;
-  border-top: 1px solid #edf1ee;
-  color: #566b5e;
+  border-top: 1px solid var(--border-soft);
+  color: var(--muted);
   white-space: nowrap;
 }
 tbody tr:hover {
-  background: #fbfdfb;
+  background: var(--surface);
 }
 .dag-link {
   display: inline-flex;
   align-items: center;
   gap: 14px;
-  color: #253f30;
+  color: var(--ink);
   min-width: 180px;
 }
 .dag-link strong {
@@ -618,7 +618,7 @@ tbody tr:hover {
 .run-row small {
   display: block;
   margin-top: 5px;
-  color: #607568;
+  color: var(--muted);
   font-size: 11px;
 }
 .dag-icon {
@@ -626,8 +626,8 @@ tbody tr:hover {
   place-items: center;
   width: 36px;
   height: 36px;
-  color: #438363;
-  background: #eaf4ec;
+  color: var(--success-fg);
+  background: var(--success-bg);
   border-radius: 9px;
   font-size: 18px;
 }
@@ -636,7 +636,7 @@ tbody tr:hover {
   place-items: center;
   width: 40px;
   height: 40px;
-  color: #88a395;
+  color: var(--muted);
   font-size: 18px;
 }
 .mono {
@@ -645,34 +645,34 @@ tbody tr:hover {
   font-weight: 400;
 }
 .muted {
-  color: #607568;
+  color: var(--muted);
 }
 .status {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  color: #718579;
+  color: var(--muted);
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
 }
 .status-success {
-  color: #2f8055;
+  color: var(--success-fg);
 }
 .status-failed,
 .status-upstream_failed {
-  color: #b34d43;
+  color: var(--danger-fg);
 }
 .status-running {
-  color: #347ba4;
+  color: var(--info-fg);
 }
 .status-queued,
 .status-scheduled,
 .status-up_for_retry {
-  color: #80571c;
+  color: var(--warning-fg);
 }
 .status-skipped {
-  color: #607568;
+  color: var(--muted);
 }
 .empty {
   min-height: 200px;
@@ -683,12 +683,12 @@ tbody tr:hover {
   gap: 12px;
   padding: 32px;
   text-align: center;
-  color: #607568;
+  color: var(--muted);
   font-size: 13px;
   line-height: 1.6;
 }
 .empty strong {
-  color: #435b4b;
+  color: var(--ink);
   font-size: 15px;
 }
 .empty.compact {
@@ -700,15 +700,15 @@ tbody tr:hover {
   border-radius: 14px;
   width: 48px;
   height: 48px;
-  background: #eff5f0;
+  background: var(--surface-hover);
   font-size: 28px;
-  color: #80a58c;
+  color: var(--muted);
 }
 .footer {
   display: flex;
   gap: 16px;
   margin-top: 32px;
-  color: #607568;
+  color: var(--muted);
   font:
     600 10px "IBM Plex Mono",
     monospace;
@@ -729,19 +729,19 @@ tbody tr:hover {
   overflow-wrap: anywhere;
 }
 .notice.warning {
-  background: #fff7e8;
-  color: #815a26;
+  background: var(--warning-bg);
+  color: var(--warning-fg);
 }
 .notice.error {
-  background: #fff0ed;
-  color: #9e473d;
+  background: var(--danger-bg);
+  color: var(--danger-fg);
 }
 .notice.success {
-  background: #eaf6ed;
-  color: #2d6d47;
+  background: var(--success-bg);
+  color: var(--success-fg);
 }
 .link-button {
-  color: #277655;
+  color: var(--green);
   background: transparent;
   border: 0;
   min-height: 44px;
@@ -758,7 +758,7 @@ tbody tr:hover {
 }
 .back-link {
   display: inline-block;
-  color: #607568;
+  color: var(--muted);
   font-size: 13px;
   padding: 8px 0;
   margin: -16px 0 24px;
@@ -777,11 +777,11 @@ tbody tr:hover {
   display: flex;
   gap: 20px;
   flex-wrap: wrap;
-  color: #607568;
+  color: var(--muted);
   font-size: 12px;
 }
 .meta span:first-child {
-  color: #477a5c;
+  color: var(--success-fg);
 }
 .actions {
   display: flex;
@@ -791,13 +791,13 @@ tbody tr:hover {
   margin-top: 24px;
 }
 .graph-card .section-heading {
-  border-bottom: 1px solid #edf1ee;
+  border-bottom: 1px solid var(--border-soft);
 }
 .graph-scroll {
   overflow: auto;
   max-height: 400px;
-  background-color: #fbfdfb;
-  background-image: radial-gradient(#dce8de 1px, transparent 1px);
+  background-color: var(--surface);
+  background-image: radial-gradient(var(--graph-dot) 1px, transparent 1px);
   background-size: 20px 20px;
 }
 .graph {
@@ -818,24 +818,24 @@ tbody tr:hover {
   align-items: flex-start;
   gap: 7px;
   padding: 10px 14px;
-  background: #fff;
-  border: 1px solid #dae6dc;
-  border-left: 3px solid #91b59b;
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--graph-node-border);
   border-radius: 8px;
   text-align: left;
-  box-shadow: 0 2px 8px #31553b0a;
+  box-shadow: 0 2px 8px var(--soft-shadow-color);
 }
 .graph-node:hover,
 .graph-node.selected {
-  border-color: #4b9670;
-  box-shadow: 0 0 0 2px #d8eee0;
+  border-color: var(--green);
+  box-shadow: 0 0 0 2px var(--surface-selected);
 }
 .node-title {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #284333;
+  color: var(--ink);
   font:
     600 12px "IBM Plex Mono",
     monospace;
@@ -852,7 +852,7 @@ tbody tr:hover {
 }
 .runs-card .section-heading,
 .log-card .section-heading {
-  border-bottom: 1px solid #edf1ee;
+  border-bottom: 1px solid var(--border-soft);
 }
 .runs-list {
   max-height: 430px;
@@ -866,18 +866,18 @@ tbody tr:hover {
   gap: 12px;
   padding: 18px 24px;
   border: 0;
-  border-bottom: 1px solid #edf1ee;
+  border-bottom: 1px solid var(--border-soft);
   border-left: 3px solid transparent;
-  background: #fff;
+  background: var(--paper);
   text-align: left;
-  color: #365040;
+  color: var(--ink);
 }
 .run-row:hover,
 .run-row.selected {
-  background: #f3f9f4;
+  background: var(--surface-hover);
 }
 .run-row.selected {
-  border-left-color: #2b8057;
+  border-left-color: var(--success-fg);
 }
 .run-row strong {
   font-size: 12px;
@@ -894,7 +894,7 @@ tbody tr:hover {
   align-items: center;
   gap: 12px;
   padding: 16px 24px;
-  color: #607568;
+  color: var(--muted);
   font-size: 12px;
 }
 .log-toolbar > span {
@@ -912,8 +912,8 @@ tbody tr:hover {
   padding: 18px;
   height: 240px;
   overflow: auto;
-  background: #25372d;
-  color: #d5e7d9;
+  background: var(--code-bg);
+  color: var(--code-fg);
   border-radius: 8px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -928,10 +928,10 @@ tbody tr:hover {
   border-radius: 14px;
   padding: 28px;
   color: var(--ink);
-  box-shadow: 0 20px 80px #172f2455;
+  box-shadow: 0 20px 80px var(--shadow-color);
 }
 .dialog::backdrop {
-  background: #18291f88;
+  background: var(--overlay);
 }
 .dialog-head {
   display: flex;
@@ -953,8 +953,8 @@ tbody tr:hover {
   height: 40px;
   border: 0;
   border-radius: 8px;
-  background: #f1f5f2;
-  color: #60786a;
+  background: var(--surface);
+  color: var(--muted);
   font-size: 22px;
 }
 .field {
@@ -962,13 +962,13 @@ tbody tr:hover {
   flex-direction: column;
   gap: 8px;
   margin-top: 18px;
-  color: #354e3e;
+  color: var(--ink);
   font-size: 13px;
   font-weight: 600;
 }
 .field span,
 .hint {
-  color: #607568;
+  color: var(--muted);
   font-size: 12px;
   font-weight: 400;
 }
@@ -978,10 +978,10 @@ tbody tr:hover {
 .log-toolbar select {
   width: 100%;
   min-height: 44px;
-  border: 1px solid #d7e3da;
+  border: 1px solid var(--border);
   border-radius: 7px;
-  background: #fff;
-  color: #324a3b;
+  background: var(--paper);
+  color: var(--ink);
   padding: 11px 12px;
 }
 .field textarea {
@@ -1001,7 +1001,7 @@ tbody tr:hover {
   gap: 16px;
 }
 .form-error {
-  color: #a84137;
+  color: var(--danger-fg);
   font-size: 13px;
   margin-top: 14px;
 }
@@ -1014,15 +1014,15 @@ tbody tr:hover {
 .preview-box {
   padding: 16px;
   margin-top: 16px;
-  background: #f3f7f3;
+  background: var(--surface);
   border-radius: 8px;
-  color: #536c5c;
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.8;
   overflow-wrap: anywhere;
 }
 .preview-box strong {
-  color: #2c4835;
+  color: var(--ink);
 }
 .preview-dates {
   max-height: 200px;
@@ -1088,7 +1088,7 @@ tbody tr:hover {
   display: flex;
   align-items: center;
   gap: 12px;
-  color: #536b5b;
+  color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
 }
@@ -1108,23 +1108,22 @@ tbody tr:hover {
   align-items: center;
   justify-content: center;
   padding: 32px 20px;
-  background:
-    radial-gradient(circle at 18% 10%, #e4f0e5, transparent 38%), #f5f7f4;
+  background: radial-gradient(circle at 18% 10%, var(--surface-accent), transparent 38%), var(--canvas);
 }
 .login-card {
   width: min(100%, 440px);
   padding: 40px;
-  background: #fff;
-  border: 1px solid #dfe9e1;
+  background: var(--paper);
+  border: 1px solid var(--border);
   border-radius: 16px;
-  box-shadow: 0 20px 70px #21392c12;
+  box-shadow: 0 20px 70px var(--soft-shadow-color);
 }
 .login-brand {
   display: flex;
   align-items: center;
   gap: 10px;
   font-size: 20px;
-  color: #213b2d;
+  color: var(--ink);
   margin-bottom: 40px;
 }
 .login-card h1 {
@@ -1146,16 +1145,16 @@ tbody tr:hover {
   border-top: 1px solid var(--border);
   font-size: 12px;
   line-height: 1.6;
-  color: #617569;
+  color: var(--muted);
 }
 .login-help strong {
-  color: #365242;
+  color: var(--ink);
 }
 .login-help code {
   padding: 10px;
   overflow-wrap: anywhere;
-  color: #315b43;
-  background: #f2f7f2;
+  color: var(--ink);
+  background: var(--surface);
   border-radius: 6px;
 }
 .login-footnote {
@@ -1164,7 +1163,7 @@ tbody tr:hover {
     600 10px "IBM Plex Mono",
     monospace;
   letter-spacing: 0.08em;
-  color: #70857a;
+  color: var(--muted);
 }
 .login-footnote span {
   letter-spacing: normal;
@@ -1184,9 +1183,9 @@ tbody tr:hover {
   width: min(320px, 100%);
   min-height: 44px;
   padding: 0 12px;
-  border: 1px solid #dbe5de;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  color: #607568;
+  color: var(--muted);
 }
 .search-box > span {
   font-size: 20px;
@@ -1200,7 +1199,7 @@ tbody tr:hover {
   background: transparent;
 }
 .search-box:focus-within {
-  outline: 3px solid #8bc0a3;
+  outline: 3px solid var(--focus-ring);
   outline-offset: 2px;
 }
 .filter-group {
@@ -1214,19 +1213,19 @@ tbody tr:hover {
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: #607568;
+  color: var(--muted);
   font-size: 12px;
   font-weight: 600;
 }
 .filter.active {
-  background: #e8f3eb;
-  color: #175f42;
+  background: var(--success-bg);
+  color: var(--green);
 }
 .table-subtitle {
   display: block;
   margin-top: 4px;
   font-size: 11px;
-  color: #607568;
+  color: var(--muted);
 }
 .detail-tabs {
   display: flex;
@@ -1246,20 +1245,20 @@ tbody tr:hover {
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
-  color: #607568;
+  color: var(--muted);
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
 }
 .detail-tab.active {
-  color: #175f42;
-  border-bottom-color: #26774f;
+  color: var(--green);
+  border-bottom-color: var(--green);
 }
 .run-overview .section-heading,
 .info-card .section-heading,
 .source-card .section-heading,
 .task-info .section-heading {
-  border-bottom: 1px solid #edf1ee;
+  border-bottom: 1px solid var(--border-soft);
 }
 .run-selector {
   display: flex;
@@ -1272,7 +1271,7 @@ tbody tr:hover {
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
-  color: #536c5c;
+  color: var(--muted);
   font-size: 12px;
   font-weight: 600;
 }
@@ -1280,9 +1279,9 @@ tbody tr:hover {
   max-width: min(100%, 500px);
   min-height: 44px;
   padding: 0 12px;
-  border: 1px solid #d7e3da;
+  border: 1px solid var(--border);
   border-radius: 7px;
-  background: #fff;
+  background: var(--paper);
   color: var(--ink);
 }
 .run-metadata,
@@ -1295,7 +1294,7 @@ tbody tr:hover {
 }
 .run-metadata dt,
 .info-grid dt {
-  color: #607568;
+  color: var(--muted);
   font-size: 11px;
   font-weight: 600;
 }
@@ -1303,7 +1302,7 @@ tbody tr:hover {
 .info-grid dd {
   overflow-wrap: anywhere;
   margin: 7px 0 0;
-  color: #294335;
+  color: var(--ink);
   font-size: 13px;
   line-height: 1.5;
 }
@@ -1329,7 +1328,7 @@ tbody tr:hover {
   gap: 12px;
   padding: 12px 24px;
   border-top: 1px solid var(--border);
-  color: #607568;
+  color: var(--muted);
   font-size: 12px;
 }
 .historical-tasks button {
@@ -1339,7 +1338,7 @@ tbody tr:hover {
 }
 .source-notice {
   padding: 16px 28px;
-  color: #607568;
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.6;
 }
@@ -1349,8 +1348,8 @@ tbody tr:hover {
   padding: 20px;
   overflow: auto;
   border-radius: 8px;
-  background: #25372d;
-  color: #d5e7d9;
+  background: var(--code-bg);
+  color: var(--code-fg);
   font:
     12px/1.7 "IBM Plex Mono",
     monospace;
@@ -1414,14 +1413,14 @@ tbody tr:hover {
   align-items: center;
   min-height: 44px;
   border-bottom: 2px solid transparent;
-  color: #607568;
+  color: var(--muted);
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
 }
 .main-nav a[aria-current="page"] {
-  border-bottom-color: #26774f;
-  color: #175f42;
+  border-bottom-color: var(--green);
+  color: var(--green);
 }
 
 .list-card,
@@ -1444,7 +1443,7 @@ tbody tr:hover {
 }
 .discovery-label {
   padding-top: 13px;
-  color: #354e3e;
+  color: var(--ink);
   font-size: 13px;
   font-weight: 700;
 }
@@ -1453,7 +1452,7 @@ tbody tr:hover {
 }
 .search-help {
   margin: 8px 0 0;
-  color: #607568;
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -1472,7 +1471,7 @@ tbody tr:hover {
   align-items: center;
   gap: 8px;
   margin-top: 8px;
-  color: #607568;
+  color: var(--muted);
   font-size: 12px;
 }
 .active-filter {
@@ -1482,10 +1481,10 @@ tbody tr:hover {
   max-width: 100%;
   min-height: 44px;
   padding: 4px 10px;
-  border: 1px solid #cddfd2;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: #f3f8f4;
-  color: #175f42;
+  background: var(--surface-hover);
+  color: var(--green);
   text-align: left;
 }
 .active-filter .filter-value {
@@ -1509,7 +1508,7 @@ tbody tr:hover {
   gap: 8px;
   max-width: 100%;
   min-width: 0;
-  color: #536c5c;
+  color: var(--muted);
   font-size: 12px;
   font-weight: 600;
 }
@@ -1520,10 +1519,10 @@ tbody tr:hover {
 .tag-filter summary {
   min-height: 44px;
   padding: 0 12px;
-  border: 1px solid #dbe5de;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: #fff;
-  color: #354e3e;
+  background: var(--paper);
+  color: var(--ink);
 }
 .project-filter select {
   min-width: 0;
@@ -1556,14 +1555,14 @@ tbody tr:hover {
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #fff;
-  box-shadow: 0 8px 24px #21392c24;
+  background: var(--paper);
+  box-shadow: 0 8px 24px var(--shadow-color);
 }
 .tag-filter-menu > input {
   width: 100%;
   min-height: 44px;
   padding: 0 12px;
-  border: 1px solid #dbe5de;
+  border: 1px solid var(--border);
   border-radius: 8px;
 }
 .tag-options {
@@ -1574,14 +1573,14 @@ tbody tr:hover {
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  border-bottom: 1px solid #edf1ee;
+  border-bottom: 1px solid var(--border-soft);
 }
 .tag-actions button {
   min-height: 44px;
 }
 .tag-help,
 .facet-note {
-  color: #607568;
+  color: var(--muted);
   font-size: 11px;
   line-height: 1.5;
 }
@@ -1597,7 +1596,7 @@ tbody tr:hover {
   align-items: center;
   gap: 8px;
   min-height: 44px;
-  color: #354e3e;
+  color: var(--ink);
   font-size: 13px;
 }
 .tag-options label span {
@@ -1621,7 +1620,7 @@ tbody tr:hover {
   height: 44px;
   border: 0;
   background: transparent;
-  color: #607568;
+  color: var(--muted);
   font-size: 20px;
 }
 .search-clear.is-hidden {
@@ -1635,14 +1634,14 @@ tbody tr:hover {
 .workflow-description,
 .matched-tasks {
   display: block;
-  color: #536c5c;
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
 .search-context mark {
   color: inherit;
-  background: #e6f1cf;
+  background: var(--highlight-bg);
   border-radius: 2px;
 }
 .workflow-labels {
@@ -1659,8 +1658,8 @@ tbody tr:hover {
   padding: 4px 8px;
   border: 0;
   border-radius: 6px;
-  background: #f1f5f2;
-  color: #536c5c;
+  background: var(--surface);
+  color: var(--muted);
   font-size: 11px;
   line-height: 1.4;
   text-overflow: ellipsis;
@@ -1669,21 +1668,21 @@ tbody tr:hover {
 }
 .project-label[aria-pressed="true"],
 .tag-label[aria-pressed="true"] {
-  box-shadow: inset 0 0 0 1px #26774f;
+  box-shadow: inset 0 0 0 1px var(--green);
 }
 .project-label.project {
-  background: #e8f3eb;
-  color: #175f42;
+  background: var(--success-bg);
+  color: var(--green);
   font-weight: 700;
 }
 .project-label.conflict,
 .project-label.unknown {
-  background: #fff4e6;
-  color: #80571c;
+  background: var(--warning-bg);
+  color: var(--warning-fg);
 }
 .metadata-issue {
   flex-basis: 100%;
-  color: #80571c;
+  color: var(--warning-fg);
   font-size: 11px;
   line-height: 1.4;
   overflow-wrap: anywhere;
@@ -1694,7 +1693,7 @@ tbody tr:hover {
   align-items: center;
   gap: 8px 16px;
   padding: 0 28px 16px;
-  color: #536c5c;
+  color: var(--muted);
   font-size: 12px;
   overflow-wrap: anywhere;
 }
@@ -1706,7 +1705,7 @@ tbody tr:hover {
 }
 .discovery-loading {
   padding: 0 28px 16px;
-  color: #80571c;
+  color: var(--warning-fg);
   font-size: 12px;
 }
 .history-card {
@@ -1738,7 +1737,7 @@ tbody tr:hover {
   display: inline-block;
   max-width: 280px;
   overflow: hidden;
-  color: #253f30;
+  color: var(--ink);
   font-weight: 700;
   text-overflow: ellipsis;
   vertical-align: bottom;
@@ -1759,7 +1758,7 @@ tbody tr:hover {
   gap: 16px;
   padding: 20px 28px;
   border-top: 1px solid var(--border);
-  color: #607568;
+  color: var(--muted);
   font-size: 12px;
 }
 .history-pagination > div {
@@ -1780,7 +1779,7 @@ tbody tr:hover {
   margin-top: 24px;
 }
 .history-tasks .section-heading {
-  border-bottom: 1px solid #edf1ee;
+  border-bottom: 1px solid var(--border-soft);
 }
 .history-task-list {
   display: grid;
@@ -1796,9 +1795,9 @@ tbody tr:hover {
   min-height: 56px;
   padding: 12px 24px;
   border: 0;
-  border-bottom: 1px solid #edf1ee;
-  background: #fff;
-  color: #284333;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--paper);
+  color: var(--ink);
   text-align: left;
 }
 .history-task > span:first-child {
@@ -1808,10 +1807,10 @@ tbody tr:hover {
 }
 .history-task:hover,
 .history-task.selected {
-  background: #f3f9f4;
+  background: var(--surface-hover);
 }
 .history-task.selected {
-  box-shadow: inset 3px 0 #2b8057;
+  box-shadow: inset 3px 0 var(--success-fg);
 }
 @media (max-width: 720px) {
   .topbar {
@@ -1880,7 +1879,7 @@ tbody tr:hover {
     align-items: start;
     gap: 8px 12px;
     padding: 16px 20px;
-    border-top: 1px solid #edf1ee;
+    border-top: 1px solid var(--border-soft);
   }
   .workflow-table td {
     min-width: 0;
@@ -1923,7 +1922,7 @@ tbody tr:hover {
     align-items: center;
     gap: 8px 12px;
     padding: 16px 20px;
-    border-top: 1px solid #edf1ee;
+    border-top: 1px solid var(--border-soft);
   }
   .history-table td {
     min-width: 0;
