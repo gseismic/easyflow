@@ -22,7 +22,7 @@ const runStates = {
   failed: "失败",
 };
 
-export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: requestedTab, historyView, setHistoryView, backHref }) {
+export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: requestedTab, historyView, setHistoryView, backHref, onWorkflowMetadata }) {
   const base = `/api/dags/${part(dagId)}`;
   const detail = usePolling(base);
   const [runId, setRunId] = useState("");
@@ -35,6 +35,10 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
   const [busy, setBusy] = useState(false);
   const dag = detail.data;
   useEffect(() => {
+    if (dag && !detail.error) onWorkflowMetadata?.(dag);
+    else if (detail.error) onWorkflowMetadata?.({ dag_id: dagId, unavailable: true });
+  }, [dag, detail.error, dagId, onWorkflowMetadata]);
+  useEffect(() => {
     if (!runId && dag?.runs?.length) {
       setRunId(
         (dag.runs.find((item) => item.state === "running") || dag.runs[0])
@@ -42,16 +46,19 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
       );
     }
   }, [dag, runId]);
-  useEffect(() => {
-    if (!taskId && dag?.tasks?.length) setTaskId(dag.tasks[0].task_id);
-  }, [dag, taskId]);
-  const runPath = tab === "run" && runId ? runDetailUrl(dagId, runId) : null;
+  const runPath = ["run", "tasks", "logs"].includes(tab) && runId ? runDetailUrl(dagId, runId) : null;
   const run = usePolling(runPath, 3000);
+  const hasTaskRecord = Boolean(run.data && Object.hasOwn(run.data.tasks || {}, taskId));
   const logPath =
-    runPath && taskId
+    tab === "logs" && runPath && hasTaskRecord
       ? taskLogUrl(dagId, runId, taskId, attempt)
       : null;
   const logs = usePolling(logPath, 3000);
+  useEffect(() => {
+    if (!["run", "tasks", "logs"].includes(tab) || (runId && !run.data && taskId)) return;
+    const ids = [...new Set([...(dag?.tasks || []).map((task) => task.task_id), ...Object.keys(run.data?.tasks || {})])];
+    if (ids.length && !ids.includes(taskId)) { setTaskId(ids[0]); setAttempt(""); }
+  }, [dag?.tasks, run.data, taskId, runId, tab]);
   const refresh = () => {
     detail.refresh();
     run.refresh();
@@ -77,6 +84,7 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
   };
   const triggered = (result) => {
     setRunId(result.run_id);
+    setAttempt("");
     setDialog("");
     window.location.hash = workflowHref(dagId);
     setNotice(
@@ -137,8 +145,9 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
             <span>{dag.task_count} 个任务</span>
           </div>
         </div>
-        {isAdmin && (
           <div className="actions">
+            <button className="button subtle" onClick={refresh}>↻ 刷新</button>
+            {isAdmin && <>
             <button
               className="button subtle"
               disabled={busy}
@@ -152,8 +161,8 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
             >
               ＋ 触发运行
             </button>
+            </>}
           </div>
-        )}
       </div>
       {detail.error && (
         <div role="alert" className="notice error">
@@ -180,8 +189,10 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
       )}
       <nav className="detail-tabs" aria-label="工作流视图">
         {[
-          ["run", "运行与任务"],
+          ["run", "概览"],
+          ["tasks", "任务"],
           ["history", "运行历史"],
+          ["logs", "日志"],
           ["schedule", "调度详情"],
           ...(isAdmin ? [["source", "源码"]] : []),
         ].map(([value, label]) => (
@@ -201,7 +212,7 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
       )}
       {tab === "schedule" && <ScheduleDetails dag={dag} />}
       {tab === "source" && isAdmin && <SourceCode base={base} runId={runId} />}
-      {tab === "run" && (
+      {["run", "tasks", "logs"].includes(tab) && (
         <>
           <section className="card run-overview">
             <div className="section-heading">
@@ -259,8 +270,9 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
                 运行信息更新失败，状态未知：{run.error}
               </div>
             )}
-            {run.data && !run.error && <RunMetadata run={run.data} />}
+            {tab === "run" && run.data && !run.error && <RunMetadata run={run.data} />}
           </section>
+          {tab === "tasks" && <>
           {run.data && !run.error && run.data.definition_matches !== true && (
             <div className="notice warning">
               {run.data.definition_matches === false
@@ -303,14 +315,31 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
               </div>
             )}
           </section>
-          <div className="detail-grid">
+          <div className="workspace-task-details">
             <TaskDetails
               task={selectedTask}
               detail={selectedDetail}
               hasRun={Boolean(runId)}
             />
+            <div className="task-selection-actions"><a className="button subtle" href={workflowHref(dagId, "logs")}>查看所选任务日志 →</a></div>
+          </div>
+          </>}
+          {tab === "logs" && <>
+            <section className="card task-selector-card" aria-label="选择日志任务">
+              <label>任务
+                <select aria-label="选择日志任务" value={taskId} onChange={(event) => { setTaskId(event.target.value); setAttempt(""); }}>
+                  {dag.tasks.length || extraTasks.length ? <>
+                    {dag.tasks.map((task) => <option key={task.task_id} value={task.task_id}>{task.task_id}</option>)}
+                    {extraTasks.map((id) => <option key={id} value={id}>{id}（仅历史记录）</option>)}
+                  </> : <option value="">暂无任务</option>}
+                </select>
+              </label>
+              <Status value={selectedDetail?.state} />
+            </section>
             <TaskLog
               logs={logs}
+              unavailableMessage={run.error && !run.data ? "运行信息加载失败，暂时无法确定该次任务日志，请刷新重试。" :
+                run.data && taskId && !hasTaskRecord ? "该次运行没有保存这个任务的记录，请选择本次运行中存在的任务。" : ""}
               taskId={taskId}
               runId={runId}
               attempt={attempt}
@@ -318,7 +347,7 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
               isAdmin={isAdmin}
               onClear={() => setDialog("clear")}
             />
-          </div>
+          </>}
         </>
       )}
       {isAdmin && dialog === "trigger" && (

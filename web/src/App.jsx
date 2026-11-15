@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, post, setCsrfToken, usePolling } from "./api";
 import SchedulerStatus from "./components/SchedulerStatus";
+import WorkspaceNavigation from "./components/WorkspaceNavigation";
 import usePendingRefresh from "./components/usePendingRefresh";
 import DagList from "./pages/DagList";
 import DagDetail from "./pages/DagDetail";
@@ -35,7 +36,7 @@ function currentRoute() {
     return match
       ? {
           name: "dag", dagId: decodeURIComponent(match[1]),
-          tab: ["history", "schedule", "source"].includes(new URLSearchParams(query).get("tab"))
+          tab: ["tasks", "logs", "history", "schedule", "source"].includes(new URLSearchParams(query).get("tab"))
             ? new URLSearchParams(query).get("tab") : "run",
         }
       : { name: "dags" };
@@ -64,6 +65,17 @@ function initialView(page) {
 
 function Workspace({ session, onLogout }) {
   const [route, setRoute] = useState(currentRoute);
+  const [navigationOpen, setNavigationOpen] = useState(false);
+  const [navigationWorkflow, setNavigationWorkflow] = useState(null);
+  const navigationDialog = useRef(null);
+  const closeNavigation = useCallback(() => setNavigationOpen(false), []);
+  const reportWorkflow = useCallback((item) => {
+    const next = item.unavailable ? { dag_id: item.dag_id, unavailable: true } : {
+      dag_id: item.dag_id, project_kind: item.project_kind, project: item.project,
+      paused: item.paused, running_count: item.running_count, latest_run: item.latest_run ? { state: item.latest_run.state } : null,
+    };
+    setNavigationWorkflow((current) => JSON.stringify(current) === JSON.stringify(next) ? current : next);
+  }, []);
   const historyScope = useRef(route.name === "history" ? route.dagId : "");
   const [filters, setFilters] = useState(() => {
     const page = currentRoute().name;
@@ -132,10 +144,11 @@ function Workspace({ session, onLogout }) {
         });
       }
       setRoute(nextRoute);
+      closeNavigation();
     };
     window.addEventListener("hashchange", update);
     return () => window.removeEventListener("hashchange", update);
-  }, []);
+  }, [closeNavigation]);
   useEffect(() => {
     if (route.name !== "dags" && route.name !== "history") return;
     const actual = currentRoute();
@@ -209,28 +222,15 @@ function Workspace({ session, onLogout }) {
   const historyHref = listHref("history", filters, historyView);
   return (
     <>
-      <header className="topbar">
+      <header className="topbar workspace-header">
+        <button className="navigation-toggle" aria-label="打开工作流导航" aria-controls="workspace-navigation"
+          aria-expanded={navigationOpen} onClick={() => setNavigationOpen(true)}>☰</button>
         <a href={workflowsHref} className="brand" aria-label="easyflow 首页">
           <span className="brand-mark">
             e<span>·</span>
           </span>
           <strong>easyflow</strong>
         </a>
-        <span className="header-divider" />
-        <nav className="main-nav" aria-label="主导航">
-          <a
-            href={workflowsHref}
-            aria-current={(["dags", "dag"].includes(route.name) || route.fromWorkflow) ? "page" : undefined}
-          >
-            工作流
-          </a>
-          <a
-            href={historyHref}
-            aria-current={route.name.startsWith("history") && !route.fromWorkflow ? "page" : undefined}
-          >
-            运行历史
-          </a>
-        </nav>
         <div className="topbar-spacer" />
         <SchedulerStatus overview={overview} />
         <div className="user-menu">
@@ -242,6 +242,11 @@ function Workspace({ session, onLogout }) {
           </button>
         </div>
       </header>
+      <div className="workspace-shell">
+        <WorkspaceNavigation username={session.username} route={route} filters={filters} view={workflowView}
+          historyHref={historyHref} metadata={navigationWorkflow?.dag_id === route.dagId ? navigationWorkflow : null}
+          open={navigationOpen} onClose={closeNavigation} dialogRef={navigationDialog} />
+        <div className="workspace-main">
       {logoutError && (
         <div className="notice error" role="alert">
           退出失败：{logoutError}
@@ -257,6 +262,7 @@ function Workspace({ session, onLogout }) {
           historyView={dagHistoryView}
           setHistoryView={setDagHistoryView}
           backHref={workflowsHref}
+          onWorkflowMetadata={reportWorkflow}
         />
       ) : route.name === "history" ? (
         <HistoryList
@@ -280,6 +286,7 @@ function Workspace({ session, onLogout }) {
             ? workflowHref(route.dagId, "history", { query: route.backQuery, state: route.backState })
             : listHref("history", filters, historyView, route.backDagId)}
           backLabel={route.fromWorkflow ? "返回工作流运行历史" : undefined}
+          onWorkflowMetadata={reportWorkflow}
         />
       ) : (
         <DagList
@@ -291,6 +298,8 @@ function Workspace({ session, onLogout }) {
           onReset={() => resetFilters("dags")}
         />
       )}
+        </div>
+      </div>
     </>
   );
 }

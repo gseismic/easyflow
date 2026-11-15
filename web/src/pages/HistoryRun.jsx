@@ -6,11 +6,15 @@ import TaskDetails from "../components/TaskDetails";
 import TaskLog from "../components/TaskLog";
 import { runDetailUrl, taskLogUrl } from "../runApi";
 
-export default function HistoryRun({ dagId, runId, requestedTaskId, requestedAttempt, backHref, backLabel = "返回运行历史" }) {
+export default function HistoryRun({ dagId, runId, requestedTaskId, requestedAttempt, backHref, backLabel = "返回运行历史", onWorkflowMetadata }) {
   const [taskId, setTaskId] = useState("");
   const [attempt, setAttempt] = useState("");
   const run = usePolling(runDetailUrl(dagId, runId), 3000);
   const dag = usePolling(`/api/dags/${part(dagId)}`);
+  useEffect(() => {
+    if (dag.data && !dag.error) onWorkflowMetadata?.(dag.data);
+    else if (dag.error) onWorkflowMetadata?.({ dag_id: dagId, unavailable: true });
+  }, [dag.data, dag.error, dagId, onWorkflowMetadata]);
   const logs = usePolling(
     taskId ? taskLogUrl(dagId, runId, taskId, attempt) : null,
     3000,

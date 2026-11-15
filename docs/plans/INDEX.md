@@ -49,3 +49,5 @@
 - 2026-11-15 15:26 Asia/Shanghai：[日、周、月视图提交依据](PLAN-20261115-007-model-unknown-uptime-periods-OUTCOME.md)，已提交 `7dd1ca82adf1618c864620265e1fe5768a3f051c`，未推送；本功能提交后继续 Airflow dashboard 调研。
 - 2026-11-15 16:56 Asia/Shanghai：[失败详情原位展开计划](PLAN-20261115-008-model-unknown-inline-failures.md)，进行中；优先完成红格中的失败任务、原始错误和对应尝试日志，复用列表及详情时间图。
 - 2026-11-15 17:10 Asia/Shanghai：[失败详情原位展开结果](PLAN-20261115-008-model-unknown-inline-failures-OUTCOME.md)，已完成；262 项后端、14 项前端、构建及桌面/窄屏/异常状态浏览器验证通过，其他三项建议记为待评估，准备提交本轮改动。
+- 2026-11-15 17:55 Asia/Shanghai：[树形导航与左右工作台计划](PLAN-20261115-009-model-unknown-sidebar-dashboard.md)，进行中；按项目组织左树、右侧详情标签和窄屏抽屉，完成后执行 review-fix-loop。
+- 2026-11-15 18:34 Asia/Shanghai：[树形导航与左右工作台结果](PLAN-20261115-009-model-unknown-sidebar-dashboard-OUTCOME.md)，已完成；20 项前端、40 项相关后端、构建与三组浏览器验收通过，review-fix-loop 最后一轮覆盖完成且无待修复逻辑问题，准备提交。

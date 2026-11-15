@@ -6,6 +6,7 @@ export default function TaskLog({
   setAttempt,
   isAdmin,
   onClear,
+  unavailableMessage,
 }) {
   return (
     <section className="card log-card">
@@ -14,7 +15,7 @@ export default function TaskLog({
           <h2>任务日志</h2>
           <p>{taskId || "选择任务查看日志"}</p>
         </div>
-        {isAdmin && runId && taskId && onClear && (
+        {isAdmin && runId && taskId && onClear && !unavailableMessage && (
           <button className="button subtle small" onClick={onClear}>
             预览重跑
           </button>
@@ -24,6 +25,8 @@ export default function TaskLog({
         <div className="empty compact">选择一次运行后查看任务日志。</div>
       ) : !taskId ? (
         <div className="empty compact">选择任务后查看日志。</div>
+      ) : unavailableMessage ? (
+        <div className="empty compact" role="status">{unavailableMessage}</div>
       ) : (
         <>
           <div className="log-toolbar">
