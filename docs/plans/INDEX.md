@@ -42,3 +42,5 @@
 - 2026-11-15 08:33 Asia/Shanghai：[入队时间修复与半小时 uptime 图计划](PLAN-20261115-005-model-unknown-uptime-queued-at.md)，进行中；修复 Review 时间字段，新增按实际执行和失败时刻聚合的可视化。
 - 2026-11-15 09:03 Asia/Shanghai：[入队时间修复与半小时 uptime 图结果](PLAN-20261115-005-model-unknown-uptime-queued-at-OUTCOME.md)，已完成；列表逐行与详情图表、失败任务/尝试日志入口已实现，252 项后端、9 项前端、构建和浏览器验收通过，默认 Ruff 无新增诊断；结果仍为 WORKTREE。
 - 2026-11-15 09:51 Asia/Shanghai：[提交与测试服务复核](PLAN-20261115-005-model-unknown-uptime-queued-at-OUTCOME.md)，已完成；代码提交 `6ac0f571d33a4de9e6c8350530926b97e1047fe7`，未推送；测试服务 `127.0.0.1:8791` 及调度器正常。
+- 2026-11-15 14:40 Asia/Shanghai：[工作流基础搜索与筛选常驻修复计划](PLAN-20261115-006-model-unknown-visible-search-filters.md)，进行中；恢复基础查找入口常驻，验证条件清除、地址恢复与窄屏行为。
+- 2026-11-15 14:44 Asia/Shanghai：[工作流基础搜索与筛选常驻修复结果](PLAN-20261115-006-model-unknown-visible-search-filters-OUTCOME.md)，已完成；基础工具始终可见，9 项前端测试、构建和浏览器回归通过，现有测试页面刷新后生效。

@@ -78,21 +78,6 @@
 .workflow-overview .summary-strip { margin: 16px 0; padding: 12px 0; }
 .workflow-overview .list-card > .section-heading { padding: 16px 28px; }
 .workflow-overview .discovery-tools { gap: 12px; padding-bottom: 16px; }
-.workflow-discovery > summary {
-  min-height: 44px;
-  padding: 12px 28px;
-  color: var(--ink);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.workflow-discovery > summary span {
-  margin-left: 12px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 400;
-}
-.workflow-discovery[open] > summary { margin-bottom: 12px; }
 .uptime-scroll {
   overflow-x: auto;
   padding: 4px;
@@ -174,7 +159,6 @@
 
 @media (max-width: 720px) {
   .uptime-controls { padding: 16px 20px; }
-  .workflow-discovery > summary { padding: 12px 20px; }
   .uptime-date { gap: 8px; }
   .uptime-date .button,
   .uptime-date input { min-height: 44px; }

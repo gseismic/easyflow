@@ -43,7 +43,6 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
   const totalLabel = facets.error || overview.error ? "统计不可用" :
     matchingTotal === null ? "统计中" : `匹配 ${matchingTotal} 个`;
   const dags = workflows.data?.dags || [];
-  const hasFilters = Boolean(view.query || view.draft || view.state !== "all" || filters.projectKind !== "all" || filters.tags.length);
   const [day, setDay] = useState(() => localDay());
   const uptime = useUptime(dags.map((dag) => dag.dag_id), day);
   const summary = workflows.data?.summary;
@@ -101,9 +100,7 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
           </div>
           <span className="count">{totalLabel}</span>
         </div>
-        <details className="workflow-discovery" open={hasFilters || undefined}>
-          <summary>搜索与筛选 <span>{hasFilters ? "已应用条件" : "按名称、项目、标签或状态查找"}</span></summary>
-        <div className="discovery-tools">
+        <section className="discovery-tools" aria-label="工作流搜索与筛选">
           <div className="search-section" role="search" aria-label="搜索工作流">
             <span className="discovery-label">搜索</span>
             <div className="search-content">
@@ -148,8 +145,7 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
               </div>
             </WorkflowFilters>
           </div>
-        </div>
-        </details>
+        </section>
         {(overview.data?.loading || workflows.data?.loading) && (
           <div className="discovery-loading" role="status">正在发现工作流，项目和结果可能尚未完整。</div>
         )}
