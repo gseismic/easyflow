@@ -69,6 +69,9 @@ with DAG("demo") as dag:
         runner.run_existing(dag, run_id=run_id, file_path=path).state.value == "success"
     )
     assert "hello from task" in client.get(f"{base}/tasks/hello/logs").json()["content"]
+    task_detail = client.get(base).json()["task_details"]["hello"]
+    assert task_detail["queued_at"]
+    assert task_detail["queued_at"] <= task_detail["started_at"] <= task_detail["ended_at"]
     assert client.post(f"{base}/clear-preview", json={"task_ids": []}).json() == {
         "to_clear": [],
         "blocked": [],
@@ -87,6 +90,7 @@ with DAG("demo") as dag:
         "to_clear"
     ] == ["hello"]
     assert client.get(base).json()["state"] == "queued"
+    assert client.get(base).json()["task_details"]["hello"]["queued_at"] is None
 
     response = client.post(
         "/api/dags/demo/pause",

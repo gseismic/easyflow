@@ -729,6 +729,54 @@ class SQLiteStateStore:
             return None
         return TaskInstanceState(row[0])
 
+    def queue_task(
+        self,
+        dag_id: str,
+        run_id: str,
+        task_id: str,
+        *,
+        now: datetime | None = None,
+        scheduler_fence: SchedulerFence | None = None,
+    ) -> bool:
+        """记录最近一次尝试进入执行队列的时间；重复扫描不覆盖排队起点。"""
+        self.init_db()
+        if now is not None and now.tzinfo is None:
+            raise ValueError("now 必须带时区。")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = now or datetime.now(UTC)
+            _assert_scheduler_lease(connection, scheduler_fence)
+            if _is_dag_paused(connection, dag_id):
+                raise DagPaused(f"DAG {dag_id!r} 已暂停。")
+            run = connection.execute(
+                "SELECT state FROM dag_run WHERE dag_id = ? AND run_id = ?",
+                (dag_id, run_id),
+            ).fetchone()
+            if run is None or run[0] not in ("queued", "running"):
+                return False
+            row = connection.execute(
+                "SELECT state, next_retry_at FROM task_instance "
+                "WHERE dag_id = ? AND run_id = ? AND task_id = ? AND map_index = -1",
+                (dag_id, run_id, task_id),
+            ).fetchone()
+            if row is None:
+                raise StateConflictError(
+                    f"TaskInstance 不存在: {dag_id}/{run_id}/{task_id}"
+                )
+            state, retry_at = row
+            if state not in (None, "scheduled", "queued", "up_for_retry"):
+                return False
+            if state == "up_for_retry" and retry_at and datetime.fromisoformat(retry_at) > current:
+                return False
+            connection.execute(
+                "UPDATE task_instance SET state = 'queued', "
+                "queued_at = CASE WHEN state = 'queued' THEN COALESCE(queued_at, ?) "
+                "ELSE ? END, started_at = NULL, ended_at = NULL, next_retry_at = NULL "
+                "WHERE dag_id = ? AND run_id = ? AND task_id = ? AND map_index = -1",
+                (_iso(current), _iso(current), dag_id, run_id, task_id),
+            )
+        return True
+
     def start_task_try(
         self,
         dag_id: str,
@@ -822,6 +870,8 @@ class SQLiteStateStore:
                 UPDATE task_instance
                 SET state = ?,
                     try_number = ?,
+                    queued_at = CASE WHEN state = 'queued' THEN COALESCE(queued_at, ?)
+                                ELSE ? END,
                     started_at = ?,
                     ended_at = NULL,
                     next_retry_at = NULL,
@@ -835,6 +885,8 @@ class SQLiteStateStore:
                 (
                     TaskInstanceState.RUNNING.value,
                     next_try,
+                    now_iso,
+                    now_iso,
                     now_iso,
                     owner,
                     os.getpid(),

@@ -375,6 +375,7 @@ class PersistentDagRunner:
                     dag.dag_id, run_id, DagRunState.RUNNING, task_states
                 )
             progressed = False
+            ready_tasks = []
             for task in ordered_tasks:
                 if self.store.is_dag_paused(dag.dag_id):
                     break
@@ -420,6 +421,17 @@ class PersistentDagRunner:
                     )
                     progressed = True
                     continue
+                try:
+                    self.store.queue_task(
+                        dag.dag_id,
+                        run_id,
+                        task.task_id,
+                        scheduler_fence=self.scheduler_fence,
+                    )
+                except DagPaused:
+                    break
+                ready_tasks.append(task)
+            for task in ready_tasks:
                 self._run_task_until_terminal(
                     dag=dag,
                     task=task,
@@ -542,6 +554,13 @@ class PersistentDagRunner:
                     time.sleep(min(remaining, 0.2))
                     continue
             try:
+                if not self.store.queue_task(
+                    dag.dag_id,
+                    run_id,
+                    task.task_id,
+                    scheduler_fence=self.scheduler_fence,
+                ):
+                    return
                 try_number = self.store.start_task_try(
                     dag.dag_id,
                     run_id,

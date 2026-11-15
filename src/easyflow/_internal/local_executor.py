@@ -144,9 +144,8 @@ class LocalExecutor:
                 for task_id, state in task_states.items()
                 if state == TaskInstanceState.RUNNING
             }
+            ready_tasks = []
             for task in ordered_tasks:
-                if len(set(active) | existing_running) >= max_active:
-                    break
                 if task.task_id in active:
                     continue
                 current_state = task_states[task.task_id]
@@ -194,6 +193,22 @@ class LocalExecutor:
                     progressed = True
                     continue
 
+                try:
+                    queued = self.store.queue_task(
+                        self.dag.dag_id,
+                        self.run_id,
+                        task.task_id,
+                        scheduler_fence=self.scheduler_fence,
+                    )
+                except DagPaused:
+                    break
+                if not queued:
+                    continue
+                ready_tasks.append(task)
+
+            for task in ready_tasks:
+                if len(set(active) | existing_running) >= max_active:
+                    break
                 ready = context.Event()
                 process = context.Process(
                     target=run_local_task_worker,

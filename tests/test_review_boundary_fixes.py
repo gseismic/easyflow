@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import py_compile
+import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
@@ -131,8 +132,13 @@ def test_resuming_local_run_counts_existing_lease_and_continues_after_completion
     assert result.state.value == "running"
     assert result.task_states == {
         "a_existing": TaskInstanceState.RUNNING,
-        "b_new": None,
+        "b_new": TaskInstanceState.QUEUED,
     }
+    with sqlite3.connect(store.path) as connection:
+        queued_at, started_at = connection.execute(
+            "SELECT queued_at, started_at FROM task_instance WHERE task_id = 'b_new'"
+        ).fetchone()
+    assert queued_at and started_at is None
     store.commit_task_terminal(
         dag_id="limited",
         run_id=run_id,
@@ -146,6 +152,11 @@ def test_resuming_local_run_counts_existing_lease_and_continues_after_completion
         ).state.value
         == "success"
     )
+    with sqlite3.connect(store.path) as connection:
+        finished = connection.execute(
+            "SELECT queued_at, started_at FROM task_instance WHERE task_id = 'b_new'"
+        ).fetchone()
+    assert finished[0] == queued_at and finished[0] <= finished[1]
 
 
 def test_run_task_capacity_is_atomic_and_independent_of_other_runs(tmp_path):

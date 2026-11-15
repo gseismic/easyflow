@@ -39,3 +39,5 @@
 - 2026-11-15 02:05 Asia/Shanghai：[代表性示例优化结果](PLAN-20261115-002-model-unknown-representative-examples-OUTCOME.md)，已实施；12 个独立示例、16 次 CLI 验证和 187 项后端测试通过，默认 Ruff 无新增诊断；Airflow 隔离安装因网络超时未完成，改动尚未提交。
 - 2026-11-15 03:45 Asia/Shanghai：[执行边界六项 Review 循环修复计划](PLAN-20261115-003-model-unknown-review-runtime-boundaries.md)，进行中；覆盖独立续租、数据库路径、executor 校验、日志组件、XCom 快照和 chain 配对。
 - 2026-11-15 04:10 Asia/Shanghai：[执行边界六项 Review 循环修复结果](PLAN-20261115-003-model-unknown-review-runtime-boundaries-OUTCOME.md)，已完成；六项及关联边界已修复，240 项后端测试、5 项前端测试、构建与核心 Ruff 通过，默认 Ruff 无新增诊断；结果仍为 WORKTREE。
+- 2026-11-15 08:33 Asia/Shanghai：[入队时间修复与半小时 uptime 图计划](PLAN-20261115-005-model-unknown-uptime-queued-at.md)，进行中；修复 Review 时间字段，新增按实际执行和失败时刻聚合的可视化。
+- 2026-11-15 09:03 Asia/Shanghai：[入队时间修复与半小时 uptime 图结果](PLAN-20261115-005-model-unknown-uptime-queued-at-OUTCOME.md)，已完成；列表逐行与详情图表、失败任务/尝试日志入口已实现，252 项后端、9 项前端、构建和浏览器验收通过，默认 Ruff 无新增诊断；结果仍为 WORKTREE。

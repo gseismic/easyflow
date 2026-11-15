@@ -66,8 +66,15 @@ export default function TaskDetails({ task, detail, hasRun }) {
           </dd>
         </div>
         <div>
-          <dt>入队时间</dt>
+          <dt title="最近一次尝试满足依赖并进入执行队列的时间；不包含依赖等待和重试间隔。">入队时间（最近尝试）</dt>
           <dd>{formatTime(detail?.queued_at)}</dd>
+        </div>
+        <div>
+          <dt>排队耗时</dt>
+          <dd>{formatDuration(
+            detail?.queued_at,
+            detail?.state === "queued" ? new Date().toISOString() : detail?.started_at,
+          )}</dd>
         </div>
         <div>
           <dt>开始时间</dt>

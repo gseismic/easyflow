@@ -11,6 +11,196 @@
   --green: #175f42;
   --paper: #fff;
   --shadow: 0 8px 32px rgba(33, 57, 44, 0.045);
+  --uptime-active: #2f8055;
+  --uptime-running: #347ba4;
+  --uptime-waiting: #a87529;
+  --uptime-failed: #b34d43;
+}
+
+.uptime-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 24px;
+  padding: 16px 28px;
+  border-top: 1px solid var(--border);
+  background: #f8faf8;
+}
+.uptime-date,
+.uptime-legend,
+.uptime-legend > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.uptime-date {
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.uptime-date label {
+  font-weight: 600;
+  margin-right: 4px;
+}
+.uptime-date input {
+  min-height: 36px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 8px;
+  color: var(--ink);
+  background: var(--paper);
+}
+.uptime-legend {
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.uptime-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+}
+.uptime-help {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.uptime-chart {
+  min-width: 0;
+  white-space: normal;
+}
+.page.workflow-overview { padding-top: 24px; }
+.workflow-overview .summary-strip { margin: 16px 0; padding: 12px 0; }
+.workflow-overview .list-card > .section-heading { padding: 16px 28px; }
+.workflow-overview .discovery-tools { gap: 12px; padding-bottom: 16px; }
+.workflow-discovery > summary {
+  min-height: 44px;
+  padding: 12px 28px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.workflow-discovery > summary span {
+  margin-left: 12px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.workflow-discovery[open] > summary { margin-bottom: 12px; }
+.uptime-scroll {
+  overflow-x: auto;
+  padding: 4px;
+  margin: -4px;
+}
+.uptime-track {
+  min-width: 576px;
+}
+.uptime-slots {
+  display: grid;
+  grid-template-columns: repeat(var(--slot-count), minmax(0, 1fr));
+  gap: 4px;
+}
+.uptime-slot {
+  display: grid;
+  place-items: center;
+  height: 32px;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: white;
+}
+.uptime-slot:hover,
+.uptime-slot[aria-pressed="true"] {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.uptime-active { background: var(--uptime-active); }
+.uptime-running { background: var(--uptime-running); }
+.uptime-waiting { background: var(--uptime-waiting); }
+.uptime-failed { background: var(--uptime-failed); }
+.uptime-idle { background: #dce5df; border-color: #ccd7cf; }
+.uptime-future { background: #f5f7f4; border-color: #dce5df; border-style: dashed; }
+.uptime-axis {
+  position: relative;
+  height: 24px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+.uptime-axis > span {
+  position: absolute;
+  white-space: nowrap;
+}
+.uptime-axis .uptime-axis-end { right: 0; }
+.uptime-caption {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  min-height: 24px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.uptime-caption > span { overflow-wrap: anywhere; }
+.uptime-caption > a { flex: none; }
+.uptime-placeholder {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+.workflow-uptime-row td {
+  padding-top: 0;
+  padding-bottom: 24px;
+  border-top: 0;
+}
+.uptime-card { margin-bottom: 24px; }
+.uptime-detail-chart { padding: 24px 28px; }
+.uptime-card .notice,
+.uptime-error { margin: 16px 28px; }
+
+@media (max-width: 720px) {
+  .uptime-controls { padding: 16px 20px; }
+  .workflow-discovery > summary { padding: 12px 20px; }
+  .uptime-date { gap: 8px; }
+  .uptime-date .button,
+  .uptime-date input { min-height: 44px; }
+  .uptime-date .button { min-width: 44px; justify-content: center; }
+  .uptime-date label { flex-basis: 100%; }
+  .uptime-legend { gap: 8px 12px; }
+  .uptime-detail-chart { padding: 16px 20px; }
+  .uptime-card .notice,
+  .uptime-error { margin: 16px 20px; }
+  .workflow-table .workflow-uptime-row {
+    display: block;
+    padding-top: 0;
+    padding-bottom: 24px;
+    border-top: 0;
+  }
+  .workflow-table .workflow-uptime-row td { display: block; }
+  .uptime-caption > a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}
+
+@media (pointer: coarse) {
+  .uptime-track { min-width: calc(var(--slot-count) * 48px); }
+  .uptime-slot { height: 44px; }
 }
 * {
   box-sizing: border-box;

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query, Request
+
+from easyflow.web.uptime import workflow_uptime
 
 router = APIRouter(prefix="/api")
 
@@ -57,4 +60,19 @@ def workflow_facets(
 ):
     return request.app.state.service.workflow_facets(
         query=q, tags=tag or [], state=state
+    )
+
+
+@router.get("/workflows/uptime")
+def uptime(
+    request: Request,
+    dag_id: Annotated[list[str], Query(min_length=1, max_length=100)],
+    start_at: datetime,
+    end_at: datetime,
+):
+    return workflow_uptime(
+        request.app.state.service.store.path,
+        dag_ids=dag_id,
+        start_at=start_at,
+        end_at=end_at,
     )

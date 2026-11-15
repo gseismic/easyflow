@@ -1,3 +1,4 @@
+import { Fragment, useState } from "react";
 import { part, usePolling } from "../api";
 import SearchBox from "../components/SearchBox";
 import SearchContext from "../components/SearchContext";
@@ -6,6 +7,10 @@ import useFacets from "../components/useFacets";
 import usePendingRefresh from "../components/usePendingRefresh";
 import WorkflowFilters, { appendWorkflowFilters, selectedFacetCount } from "../components/WorkflowFilters";
 import WorkflowLabels from "../components/WorkflowLabels";
+import UptimeControls from "../components/UptimeControls";
+import UptimeStrip from "../components/UptimeStrip";
+import useUptime from "../components/useUptime";
+import { localDay } from "../uptime";
 
 const states = [
   ["all", "全部"],
@@ -38,6 +43,9 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
   const totalLabel = facets.error || overview.error ? "统计不可用" :
     matchingTotal === null ? "统计中" : `匹配 ${matchingTotal} 个`;
   const dags = workflows.data?.dags || [];
+  const hasFilters = Boolean(view.query || view.draft || view.state !== "all" || filters.projectKind !== "all" || filters.tags.length);
+  const [day, setDay] = useState(() => localDay());
+  const uptime = useUptime(dags.map((dag) => dag.dag_id), day);
   const summary = workflows.data?.summary;
   const changeView = (patch) =>
     setView((current) => ({ ...current, ...patch, cursors: [null], page: 0 }));
@@ -45,6 +53,7 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
     overview.refresh();
     workflows.refresh();
     facets.refresh();
+    uptime.refresh();
   };
   const nextPage = () => {
     if (!workflows.data?.next_cursor) return;
@@ -55,7 +64,7 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
     }));
   };
   return (
-    <main className="page">
+    <main className="page workflow-overview">
       <div className="eyebrow">WORKFLOW OVERVIEW <span>／ 工作流</span></div>
       <div className="page-title-row">
         <div>
@@ -92,6 +101,8 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
           </div>
           <span className="count">{totalLabel}</span>
         </div>
+        <details className="workflow-discovery" open={hasFilters || undefined}>
+          <summary>搜索与筛选 <span>{hasFilters ? "已应用条件" : "按名称、项目、标签或状态查找"}</span></summary>
         <div className="discovery-tools">
           <div className="search-section" role="search" aria-label="搜索工作流">
             <span className="discovery-label">搜索</span>
@@ -138,8 +149,16 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
             </WorkflowFilters>
           </div>
         </div>
+        </details>
         {(overview.data?.loading || workflows.data?.loading) && (
           <div className="discovery-loading" role="status">正在发现工作流，项目和结果可能尚未完整。</div>
+        )}
+        {dags.length > 0 && <UptimeControls day={day} onChange={setDay} />}
+        {dags.length > 0 && uptime.error && (
+          <div className="notice error uptime-error" role="alert">
+            运行时段更新失败{uptime.data ? "，当前显示旧数据" : ""}：{uptime.error}{" "}
+            <button className="link-button" onClick={uptime.refresh}>重试</button>
+          </div>
         )}
         {!workflows.data && !workflows.error ? (
           <div className="empty">正在加载工作流…</div>
@@ -161,7 +180,8 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
               </tr></thead>
               <tbody>
                 {dags.map((dag) => (
-                  <tr key={dag.dag_id}>
+                  <Fragment key={dag.dag_id}>
+                  <tr>
                     <td>
                       <a className="dag-link" href={`#/dags/${part(dag.dag_id)}`}>
                         <span className="dag-icon">↗</span>
@@ -193,6 +213,10 @@ export default function DagList({ overview, view, setView, filters, onFiltersCha
                     </td>
                     <td><a className="row-arrow" href={`#/dags/${part(dag.dag_id)}`} aria-label={`查看 ${dag.dag_id}`}>→</a></td>
                   </tr>
+                  <tr className="workflow-uptime-row"><td colSpan={6}>
+                    <UptimeStrip key={day} dagId={dag.dag_id} slots={uptime.data?.workflows?.[dag.dag_id]} error={uptime.error} />
+                  </td></tr>
+                  </Fragment>
                 ))}
               </tbody>
             </table>

@@ -21,6 +21,8 @@ function currentRoute() {
     return dagId && runId
       ? {
           name: "history-run", dagId, runId,
+          taskId: params.get("task_id") || "",
+          attempt: /^\d+$/.test(params.get("attempt") || "") ? params.get("attempt") : "",
           backDagId: params.get("from_dag") || "",
           fromWorkflow: params.get("from_workflow") === "1",
           backQuery: (params.get("from_q") || "").slice(0, 1000).trim(),
@@ -269,9 +271,11 @@ function Workspace({ session, onLogout }) {
         />
       ) : route.name === "history-run" ? (
         <HistoryRun
-          key={JSON.stringify([route.dagId, route.runId])}
+          key={JSON.stringify([route.dagId, route.runId, route.taskId, route.attempt])}
           dagId={route.dagId}
           runId={route.runId}
+          requestedTaskId={route.taskId}
+          requestedAttempt={route.attempt}
           backHref={route.fromWorkflow
             ? workflowHref(route.dagId, "history", { query: route.backQuery, state: route.backState })
             : listHref("history", filters, historyView, route.backDagId)}

@@ -6,7 +6,7 @@ import TaskDetails from "../components/TaskDetails";
 import TaskLog from "../components/TaskLog";
 import { runDetailUrl, taskLogUrl } from "../runApi";
 
-export default function HistoryRun({ dagId, runId, backHref, backLabel = "返回运行历史" }) {
+export default function HistoryRun({ dagId, runId, requestedTaskId, requestedAttempt, backHref, backLabel = "返回运行历史" }) {
   const [taskId, setTaskId] = useState("");
   const [attempt, setAttempt] = useState("");
   const run = usePolling(runDetailUrl(dagId, runId), 3000);
@@ -17,8 +17,13 @@ export default function HistoryRun({ dagId, runId, backHref, backLabel = "返回
   );
   const taskIds = Object.keys(run.data?.tasks || {}).sort();
   useEffect(() => {
-    if (!taskId && taskIds.length) setTaskId(taskIds[0]);
-  }, [taskId, run.data]);
+    if (!taskId && taskIds.length) {
+      const target = taskIds.includes(requestedTaskId) ? requestedTaskId :
+        taskIds.find((id) => run.data.tasks[id] === "failed") || taskIds[0];
+      setTaskId(target);
+      setAttempt(target === requestedTaskId ? requestedAttempt || "" : "");
+    }
+  }, [taskId, run.data, requestedTaskId, requestedAttempt]);
   const matchingTasks =
     run.data?.definition_matches === true && !dag.error ? dag.data?.tasks : null;
   const selectedTask =
@@ -107,6 +112,9 @@ export default function HistoryRun({ dagId, runId, backHref, backLabel = "返回
               </div>
             )}
           </section>
+          {taskId === requestedTaskId && attempt && attempt === requestedAttempt && (
+            <p className="task-hint">已定位到 {taskId} 的第 {attempt} 次尝试日志；任务状态与时间显示最近一次尝试的结果。</p>
+          )}
           <div className="detail-grid">
             <TaskDetails
               task={selectedTask}

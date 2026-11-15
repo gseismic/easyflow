@@ -10,6 +10,7 @@ import Status, { formatTime } from "../components/Status";
 import TaskDetails from "../components/TaskDetails";
 import TaskLog from "../components/TaskLog";
 import TriggerDialog from "../components/TriggerDialog";
+import WorkflowUptime from "../components/WorkflowUptime";
 import { workflowHref } from "../listRoute";
 import { runDetailUrl, taskLogUrl } from "../runApi";
 import WorkflowRunHistory from "./WorkflowRunHistory";
@@ -194,6 +195,7 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
           </a>
         ))}
       </nav>
+      {(tab === "run" || tab === "history") && <WorkflowUptime dagId={dagId} />}
       {tab === "history" && (
         <WorkflowRunHistory dagId={dagId} view={historyView} setView={setHistoryView} />
       )}

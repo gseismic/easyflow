@@ -49,3 +49,11 @@
 - 使用同一 `uv run ruff check --output-format json src tests examples` 环境按文件、规则及信息计数：基准 195 项，当前 194 项，新增 0 项；减少一条 chain 相邻参数遍历的 RUF007。默认全量检查仍失败，不能视为本问题已解决。
 - 核心 `--select E4,E7,E9,F` 检查、新增续租模块和新增测试文件的默认检查、`git diff --check` 均通过；最终后端 240 项测试、前端 5 项测试及构建通过。
 - 关联计划与结果：`docs/plans/PLAN-20261115-003-model-unknown-review-runtime-boundaries.md`、`docs/plans/PLAN-20261115-003-model-unknown-review-runtime-boundaries-OUTCOME.md`。本次未提交或推送。
+
+## 2026-11-15 09:03 Asia/Shanghai：入队时间与 uptime 图验证
+
+- 更新模型：Codex（基于 GPT-6；完整模型 ID 未由环境提供）。状态保持未解决，本次未调整 lint 策略。
+- 对比版本：基准 `a8708df99a4f6ea8c4c274e86dc5fc577b88fc6c` 与本次 `WORKTREE`。相关 Python 改动为 `src/easyflow/_internal/{state_store,persistent_runner,local_executor}.py`、`src/easyflow/web/routers/catalog.py`、新增 `src/easyflow/web/uptime.py`、`tests/test_{task_queued_at,web_uptime}.py`、`tests/test_{review_boundary_fixes,web}.py`；结果尚未固定为提交。
+- 同一 Ruff 环境执行默认全量检查，按相对文件、规则和信息比较：基准 194 项，当前 194 项，新增 0 项、减少 0 项；默认检查仍以非零状态退出，不代表本问题已解决。
+- 核心 `--select E4,E7,E9,F`、新增 Python 文件的默认 Ruff、`git diff --check` 均通过。252 项后端测试、9 项前端测试、构建及隔离浏览器验收通过。
+- 关联结果：`docs/plans/PLAN-20261115-005-model-unknown-uptime-queued-at-OUTCOME.md`。本次未提交或推送。
