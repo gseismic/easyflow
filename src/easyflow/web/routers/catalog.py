@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query, Request
 
-from easyflow.web.uptime import workflow_uptime
+from easyflow.web.uptime import workflow_failures, workflow_uptime
 
 router = APIRouter(prefix="/api")
 
@@ -79,4 +79,23 @@ def uptime(
         end_at=end_at,
         granularity=granularity,
         timezone_name=timezone_name,
+    )
+
+
+@router.get("/workflows/uptime/failures")
+def uptime_failures(
+    request: Request,
+    dag_id: str,
+    start_at: datetime,
+    end_at: datetime,
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    offset: Annotated[int, Query(ge=0, le=2**63 - 1)] = 0,
+):
+    return workflow_failures(
+        request.app.state.service.store.path,
+        dag_id=dag_id,
+        start_at=start_at,
+        end_at=end_at,
+        limit=limit,
+        offset=offset,
     )

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { dayBounds, localDay, periodBounds, periodRange, shiftDay, shiftPeriod, slotDescription, uptimeRunHref, uptimeUrl } from "../src/uptime.js";
+import { dayBounds, failureKey, failureRunHref, localDay, periodBounds, periodRange, shiftDay, shiftPeriod, slotDescription, uptimeFailuresUrl, uptimeLogPreview, uptimeRunHref, uptimeUrl } from "../src/uptime.js";
 
 test("本地日期转为 UTC 范围，跨月切换保留特殊工作流 ID", () => {
   const original = process.env.TZ;
@@ -55,6 +55,37 @@ test("红格链接保留具体失败任务与尝试，重试成功后仍可查�
   assert.equal(params.get("run_id"), slot.sample_run_id);
   assert.equal(params.get("task_id"), slot.sample_task_id);
   assert.equal(params.get("attempt"), "2");
+});
+
+test("失败时段查询与日志链接保留原边界、特殊 ID 和具体尝试", () => {
+  const slot = { start_at: "2026-11-01T00:00:00-04:00", end_at: "2026-11-02T00:00:00-05:00" };
+  const url = new URL(uptimeFailuresUrl("flow/中文?+%", slot, 25), "http://localhost");
+  assert.equal(url.searchParams.get("dag_id"), "flow/中文?+%");
+  assert.equal(url.searchParams.get("start_at"), slot.start_at);
+  assert.equal(url.searchParams.get("end_at"), slot.end_at);
+  assert.equal(url.searchParams.get("offset"), "25");
+  const item = { run_id: "run/失败?+%", task_id: "task/发布?+%", try_number: 2 };
+  const params = new URLSearchParams(failureRunHref("flow/中文?+%", item).split("?")[1]);
+  assert.equal(params.get("run_id"), item.run_id);
+  assert.equal(params.get("task_id"), item.task_id);
+  assert.equal(params.get("attempt"), "2");
+  const fallback = new URLSearchParams(failureRunHref("flow/中文?+%", { run_id: item.run_id }).split("?")[1]);
+  assert.equal(fallback.has("task_id"), false);
+  assert.equal(fallback.has("attempt"), false);
+  assert.notEqual(failureKey(item), failureKey({ ...item, try_number: 1 }));
+  assert.notEqual(failureKey({ run_id: "a:b", task_id: "c", try_number: 1 }), failureKey({ run_id: "a", task_id: "b:c", try_number: 1 }));
+});
+
+test("日志预览保留错误末尾，限制行数和长度并区分空日志与不可用日志", () => {
+  assert.equal(uptimeLogPreview({ content: null }), null);
+  assert.deepEqual(uptimeLogPreview({ content: "" }), { content: "", truncated: false });
+  const lines = Array.from({ length: 20 }, (_, i) => `行 ${i}`).join("\n");
+  const preview = uptimeLogPreview({ content: lines });
+  assert.equal(preview.content.split("\n").length, 12);
+  assert.equal(preview.content.endsWith("行 19"), true);
+  assert.equal(preview.truncated, true);
+  assert.equal(uptimeLogPreview({ content: "x".repeat(9000) }).content.length, 8000);
+  assert.equal(uptimeLogPreview({ content: "short", truncated: true }).truncated, true);
 });
 
 test("周从周一开始，月份包含完整日期，默认仍查询半小时明细", () => {

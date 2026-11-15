@@ -206,3 +206,89 @@ def workflow_uptime(
         "slot_minutes": 30 if granularity == "half_hour" else None,
         "workflows": workflows,
     }
+
+
+def workflow_failures(
+    database: Path,
+    *,
+    dag_id: str,
+    start_at: datetime,
+    end_at: datetime,
+    limit: int = 25,
+    offset: int = 0,
+    now: datetime | None = None,
+) -> dict:
+    """按失败发生时间分页读取历史尝试；同格没有任务失败时补充运行级失败。"""
+    if not dag_id:
+        raise ValueError("请选择一个工作流。")
+    if start_at.tzinfo is None or end_at.tzinfo is None:
+        raise ValueError("失败记录的起止时间必须带时区。")
+    start, end = start_at.astimezone(UTC), end_at.astimezone(UTC)
+    if not 0 < (end - start).total_seconds() <= 25 * 3600:
+        raise ValueError("失败记录的范围必须大于零且不超过 25 小时。")
+    if not 1 <= limit <= 100 or not 0 <= offset <= 2**63 - 1:
+        raise ValueError("失败记录每页为 1 到 100 条，偏移量必须为非负的 64 位整数。")
+    current = now or datetime.now(UTC)
+    if current.tzinfo is None:
+        raise ValueError("now 必须带时区。")
+    params = {
+        "dag_id": dag_id,
+        "start": start.timestamp(),
+        "end": end.timestamp(),
+        "now": current.timestamp(),
+        "limit": limit,
+        "offset": offset,
+    }
+    failures = """
+        WITH failed_tasks AS (
+            SELECT t.run_id, t.task_id, t.try_number, t.started_at, t.ended_at,
+                uptime_time(t.ended_at) AS failed_at,
+                SUBSTR(t.error_code, 1, 200) AS error_code,
+                SUBSTR(t.error_message, 1, 2000) AS error_message,
+                LENGTH(COALESCE(t.error_message, '')) > 2000 AS error_message_truncated,
+                r.state AS run_state
+            FROM task_try t JOIN dag_run r ON r.dag_id = t.dag_id AND r.run_id = t.run_id
+            WHERE t.dag_id = :dag_id AND t.state = 'failed'
+                AND uptime_time(t.ended_at) >= :start AND uptime_time(t.ended_at) < :end
+                AND uptime_time(t.ended_at) <= :now
+        ), failures AS (
+            SELECT * FROM failed_tasks
+            UNION ALL
+            SELECT r.run_id, NULL, NULL, r.start_date, r.end_date,
+                uptime_time(r.end_date), NULL, NULL, 0, r.state
+            FROM dag_run r
+            WHERE r.dag_id = :dag_id AND r.state = 'failed'
+                AND uptime_time(r.end_date) >= :start AND uptime_time(r.end_date) < :end
+                AND uptime_time(r.end_date) <= :now
+                AND NOT EXISTS (SELECT 1 FROM failed_tasks t WHERE t.run_id = r.run_id)
+        )
+    """
+    with sqlite3.connect(database) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.create_function("uptime_time", 1, _timestamp, deterministic=True)
+        # 计数与当前页共享快照，分页之间允许读取最新状态。
+        connection.execute("BEGIN")
+        counts = connection.execute(
+            failures
+            + "SELECT COUNT(*) AS total, COUNT(DISTINCT run_id) AS runs FROM failures",
+            params,
+        ).fetchone()
+        rows = connection.execute(
+            failures
+            + "SELECT run_id, task_id, try_number, started_at, ended_at, error_code, "
+            "error_message, error_message_truncated, run_state FROM failures "
+            "ORDER BY failed_at DESC, run_id, task_id, try_number DESC LIMIT :limit OFFSET :offset",
+            params,
+        ).fetchall()
+    items = [dict(row) for row in rows]
+    for item in items:
+        item["error_message_truncated"] = bool(item["error_message_truncated"])
+    return {
+        "start_at": start.isoformat(),
+        "end_at": end.isoformat(),
+        "as_of": current.astimezone(UTC).isoformat(),
+        "items": items,
+        "total": counts["total"],
+        "failed_run_count": counts["runs"],
+        "next_offset": offset + limit if offset + limit < counts["total"] else None,
+    }

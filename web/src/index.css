@@ -201,7 +201,86 @@
 .uptime-card .notice,
 .uptime-error { margin: 16px 28px; }
 
+.uptime-failures {
+  min-width: 0;
+  max-width: 100%;
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #e5c9c5;
+  border-radius: 8px;
+  background: #fdf9f8;
+  font-size: 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.uptime-failure-heading,
+.uptime-failure-title,
+.uptime-failure-actions,
+.uptime-failure-pagination,
+.uptime-failure-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+.uptime-failure-heading,
+.uptime-failure-title { justify-content: space-between; }
+.uptime-failure-heading h3,
+.uptime-failure-title h4 { margin: 0; font-size: 14px; color: var(--ink); }
+.uptime-failure-heading p { margin: 4px 0 0; }
+.uptime-failure-grid {
+  display: grid;
+  grid-template-columns: minmax(200px, 0.4fr) minmax(0, 1fr);
+  gap: 24px;
+  margin-top: 16px;
+}
+.uptime-failure-list,
+.uptime-failure-detail { min-width: 0; }
+.uptime-failure-list > [role="group"] {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--paper);
+}
+.uptime-failure-item {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-height: 44px;
+  padding: 12px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-left: 4px solid transparent;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.uptime-failure-item:last-child { border-bottom: 0; }
+.uptime-failure-item:hover,
+.uptime-failure-item[aria-pressed="true"] { border-left-color: var(--uptime-failed); background: #f8edeb; }
+.uptime-failure-item span,
+.uptime-failure-item small,
+.uptime-failure-title > span,
+.uptime-failure-title h4 > span { color: var(--muted); font-size: 12px; font-weight: 400; }
+.uptime-failure-title h4 > span { display: block; margin-top: 4px; }
+.uptime-failure-pagination { margin-top: 8px; gap: 8px; }
+.uptime-failure-pagination > span { flex-basis: 100%; color: var(--muted); }
+.uptime-failure-summary { margin-top: 16px; color: #883b33; }
+.uptime-failure-summary p { margin: 8px 0; color: inherit; white-space: pre-wrap; }
+.uptime-failure-times { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 16px 0; }
+.uptime-failure-times dt { margin-bottom: 4px; color: var(--muted); }
+.uptime-failure-times dd { margin: 0; }
+.uptime-failure-log-label { margin: 8px 0; }
+.log-output.uptime-failure-log { height: auto; min-height: 64px; max-height: 200px; margin: 0; padding: 16px; }
+.uptime-failure-links { margin-top: 16px; }
+.uptime-failure-links > a { display: inline-flex; align-items: center; min-height: 44px; }
+.uptime-failures .notice { margin: 16px 0; }
+
 @media (max-width: 720px) {
+  .uptime-failure-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .uptime-failure-list > [role="group"] { max-height: 200px; }
   .uptime-controls { padding: 16px 20px; }
   .uptime-date { gap: 8px; }
   .uptime-date .button,

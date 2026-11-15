@@ -112,3 +112,31 @@ export function uptimeRunHref(dagId, slot) {
   if (slot.sample_try_number) params.set("attempt", String(slot.sample_try_number));
   return `${path}?${params}`;
 }
+
+export function uptimeFailuresUrl(dagId, slot, offset = 0) {
+  if (!slot) return null;
+  const params = new URLSearchParams({
+    dag_id: dagId, start_at: slot.start_at, end_at: slot.end_at,
+    limit: "25", offset: String(offset),
+  });
+  return `/api/workflows/uptime/failures?${params}`;
+}
+
+export function failureKey(item) {
+  return JSON.stringify([item.run_id, item.task_id, item.try_number]);
+}
+
+export function failureRunHref(dagId, item) {
+  return uptimeRunHref(dagId, {
+    sample_run_id: item.run_id,
+    sample_task_id: item.task_id,
+    sample_try_number: item.try_number,
+  });
+}
+
+export function uptimeLogPreview(log) {
+  if (log.content == null) return null;
+  const lines = log.content.split("\n");
+  const content = lines.slice(-12).join("\n").slice(-8000);
+  return { content, truncated: Boolean(log.truncated || content.length < log.content.length) };
+}

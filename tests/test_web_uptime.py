@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from easyflow._internal.state_store import SQLiteStateStore
 from easyflow.web.app import create_app
-from easyflow.web.uptime import workflow_uptime
+from easyflow.web.uptime import workflow_failures, workflow_uptime
 
 START = datetime(2026, 1, 2, tzinfo=UTC)
 
@@ -55,6 +55,229 @@ def add_try(
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (dag_id, run_id, task_id, attempt, state, start, end),
     )
+
+
+def test_failure_details_preserve_recovered_attempts_and_paginate_all_failures(
+    tmp_path,
+):
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    store.init_db()
+    with sqlite3.connect(store.path) as connection:
+        add_run(connection, "recovered", end="2026-01-02T00:25:00+00:00")
+        for attempt, minute, state in [
+            (1, 10, "failed"),
+            (2, 20, "failed"),
+            (3, 25, "success"),
+        ]:
+            add_try(
+                connection,
+                "recovered",
+                task_id="publish",
+                attempt=attempt,
+                start="2026-01-02T00:01:00+00:00",
+                end=f"2026-01-02T00:{minute}:00+00:00",
+                state=state,
+            )
+        add_try(
+            connection,
+            "recovered",
+            task_id="validate",
+            state="failed",
+            start="2026-01-02T00:01:00+00:00",
+            end="2026-01-02T00:10:00+00:00",
+        )
+        connection.execute(
+            "UPDATE task_try SET error_code = 'TimeoutError', error_message = ? "
+            "WHERE run_id = 'recovered' AND task_id = 'publish' AND try_number = 1",
+            ("数据源连接超时" * 400,),
+        )
+        add_run(connection, "failed", state="failed", end="2026-01-02T00:12:00+00:00")
+        add_try(
+            connection,
+            "failed",
+            state="failed",
+            start=None,
+            end="2026-01-02T00:12:00+00:00",
+        )
+        add_run(connection, "legacy", state="failed", end="2026-01-02T00:22:00+00:00")
+    params = {
+        "dag_id": "demo",
+        "start_at": START,
+        "end_at": START + timedelta(minutes=30),
+        "now": START + timedelta(hours=1),
+    }
+    pages = [
+        workflow_failures(store.path, **params, limit=2, offset=i) for i in [0, 2, 4]
+    ]
+    assert all(page["total"] == 5 and page["failed_run_count"] == 3 for page in pages)
+    assert [page["next_offset"] for page in pages] == [2, 4, None]
+    items = [item for page in pages for item in page["items"]]
+    assert [
+        (item["run_id"], item["task_id"], item["try_number"]) for item in items
+    ] == [
+        ("legacy", None, None),
+        ("recovered", "publish", 2),
+        ("failed", "work", 1),
+        ("recovered", "publish", 1),
+        ("recovered", "validate", 1),
+    ]
+    assert items[3]["run_state"] == "success"
+    assert items[3]["error_code"] == "TimeoutError"
+    assert (
+        len(items[3]["error_message"]) == 2000 and items[3]["error_message_truncated"]
+    )
+    assert items[4]["error_message"] is None and not items[4]["error_message_truncated"]
+    assert items[0]["started_at"] is None and items[0]["run_state"] == "failed"
+    assert "traceback" not in items[3] and "log_path" not in items[3]
+    slot = workflow_uptime(
+        store.path,
+        dag_ids=["demo"],
+        **{k: v for k, v in params.items() if k != "dag_id"},
+    )["workflows"]["demo"][0]
+    assert slot["failed_run_count"] == pages[0]["failed_run_count"]
+
+
+def test_failure_details_use_actual_microsecond_boundaries_and_exclude_future(tmp_path):
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    store.init_db()
+    with sqlite3.connect(store.path) as connection:
+        for run_id, ended in [
+            ("before", "2026-01-01T23:59:59.999999+00:00"),
+            ("left", "2026-01-02T08:00:00+08:00"),
+            ("last", "2026-01-02T00:29:59.999999+00:00"),
+            ("right", "2026-01-02T00:30:00+00:00"),
+            ("future", "2026-01-02T00:40:00+00:00"),
+        ]:
+            add_run(connection, run_id)
+            add_try(connection, run_id, start=None, end=ended, state="failed")
+        add_run(connection, "other", dag_id="other")
+        add_try(
+            connection,
+            "other",
+            dag_id="other",
+            start=None,
+            end=START.isoformat(),
+            state="failed",
+        )
+        # 任务失败与运行失败发生在不同格时，保留各自所在格的原有标红语义。
+        add_run(connection, "cross", state="failed", end="2026-01-02T00:05:00+00:00")
+        add_try(
+            connection,
+            "cross",
+            start=None,
+            end="2026-01-01T23:59:00+00:00",
+            state="failed",
+        )
+    data = workflow_failures(
+        store.path,
+        dag_id="demo",
+        start_at=START,
+        end_at=START + timedelta(minutes=30),
+        now=START + timedelta(hours=1),
+    )
+    assert [item["run_id"] for item in data["items"]] == ["last", "cross", "left"]
+    assert data["items"][1]["task_id"] is None
+    current = workflow_failures(
+        store.path,
+        dag_id="demo",
+        start_at=START,
+        end_at=START + timedelta(hours=1),
+        now=START + timedelta(minutes=30),
+    )
+    assert "right" in {item["run_id"] for item in current["items"]}
+    assert "future" not in {item["run_id"] for item in current["items"]}
+    empty = workflow_failures(
+        store.path,
+        dag_id="removed",
+        start_at=START,
+        end_at=START + timedelta(hours=25),
+    )
+    assert empty["items"] == [] and empty["total"] == 0 and empty["next_offset"] is None
+
+
+def test_failure_api_auth_validation_special_ids_and_exact_attempt_log(tmp_path):
+    dags = tmp_path / "dags"
+    dags.mkdir()
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    app = create_app(
+        dags_folder=str(dags),
+        database_url=str(tmp_path / "state.db"),
+        log_root=str(logs),
+    )
+    app.state.auth.create_user("reader", "readonly-password", "viewer")
+    dag_id, run_id, task_id = "flow/中文?+%", "run/失败?+%", "task/发布?+%"
+    with sqlite3.connect(app.state.service.store.path) as connection:
+        add_run(connection, run_id, dag_id=dag_id)
+        for attempt, state in [(1, "failed"), (2, "success")]:
+            add_try(
+                connection,
+                run_id,
+                dag_id=dag_id,
+                task_id=task_id,
+                attempt=attempt,
+                state=state,
+                start=START.isoformat(),
+                end=(START + timedelta(minutes=attempt)).isoformat(),
+            )
+            log = logs / f"attempt-{attempt}.log"
+            log.write_text(f"第 {attempt} 次尝试：{state}", encoding="utf-8")
+            connection.execute(
+                "UPDATE task_try SET log_path = ? WHERE try_number = ?",
+                (str(log), attempt),
+            )
+    params = {
+        "dag_id": dag_id,
+        "start_at": START.isoformat(),
+        "end_at": (START + timedelta(minutes=30)).isoformat(),
+    }
+    endpoint = "/api/workflows/uptime/failures"
+    with TestClient(app, base_url="http://127.0.0.1:8790") as client:
+        assert client.get(endpoint, params=params).status_code == 401
+        assert (
+            client.post(
+                "/api/auth/login",
+                json={"username": "reader", "password": "readonly-password"},
+            ).status_code
+            == 200
+        )
+        response = client.get(endpoint, params=params)
+        assert (
+            response.status_code == 200
+            and response.headers["cache-control"] == "no-store"
+        )
+        item = response.json()["items"][0]
+        assert (
+            item["run_id"],
+            item["task_id"],
+            item["try_number"],
+            item["run_state"],
+        ) == (run_id, task_id, 1, "success")
+        log = client.get(
+            "/api/history/task-log",
+            params={
+                "dag_id": dag_id,
+                "run_id": item["run_id"],
+                "task_id": item["task_id"],
+                "attempt": item["try_number"],
+            },
+        )
+        assert log.status_code == 200 and log.json()["content"] == "第 1 次尝试：failed"
+        for patch in [
+            {"dag_id": ""},
+            {"start_at": "2026-01-02T00:00:00"},
+            {"end_at": params["start_at"]},
+            {"end_at": (START + timedelta(hours=25, microseconds=1)).isoformat()},
+        ]:
+            assert client.get(endpoint, params={**params, **patch}).status_code == 400
+        for patch in [
+            {"limit": 0},
+            {"limit": 101},
+            {"offset": -1},
+            {"offset": 2**63},
+            {"start_at": "invalid"},
+        ]:
+            assert client.get(endpoint, params={**params, **patch}).status_code == 422
 
 
 def test_uptime_crosses_slots_keeps_retry_errors_and_uses_actual_time(tmp_path):
