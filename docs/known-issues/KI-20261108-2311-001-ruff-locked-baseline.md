@@ -83,3 +83,10 @@
 - 使用同一 `uv run ruff check --output-format json` 分别检查导出的基准及当前 `src tests examples`，按相对文件、规则及信息计数：两者均 194 项，新增 0、减少 0。默认全量检查仍失败，不能视为本问题已解决。
 - 核心 `--select E4,E7,E9,F`、uptime 及其测试文件默认检查、`git diff --check` 通过；265 项后端、22 项前端、构建、隔离浏览器和 DST/性能回归通过。
 - 关联结果：`docs/plans/PLAN-20261115-010-model-unknown-web-review-fixes-OUTCOME.md`；没有本轮修复 commit，未推送。
+
+## 2026-11-17 03:53 Asia/Shanghai：工作流刷新修复的针对性基线复核
+
+- 更新模型：Codex（基于 GPT-6；完整实际模型 ID 未由环境提供）。状态保持未解决；本次没有调整 lint 策略。
+- 依据版本：`WORKTREE`，基准完整提交 `64597a920303d75f8625c868b7f377b519443c66`；相关 Python 改动为 `src/easyflow/_internal/dag_parser.py`、`tests/test_web_discovery_refresh.py`，尚未提交。
+- 使用同一默认 Ruff 分别检查导出的基准解析器及当前解析器，按规则与信息计数，两者均有 `BLE001`、`S102` 各一条，新增 0。新测试文件默认检查、这两个文件的 `--select E4,E7,E9,F` 及差异检查通过。没有重跑全仓默认 Ruff，不把两条诊断描述为全仓诊断总数，也不描述为默认检查通过。
+- 8 项新增回归、100 项相关后端、37 项前端及隔离浏览器通过；关联结果为 `docs/plans/PLAN-20261117-001-model-unknown-discovery-refresh-OUTCOME.md`。本次没有提交或推送。

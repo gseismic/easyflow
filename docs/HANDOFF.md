@@ -1,6 +1,6 @@
 # easyflow 会话交接
 
-最新交接见第 12 节（2026-11-16 05:41 Asia/Shanghai）：用户已认可现有设计方向并授权实施代码微调，随后要求先交接，当前目标为 paused。已保存 19 张原图和 16 张 A2 设计稿，代码尚未修改；恢复后直接实施，不继续补图。第 11 节记录最近小时与周/月展开功能；下文前 10 节为历史信息，旧默认日视图、无 TODOS、A1 未实现等描述不可代替当前代码和最新交接。
+最新交接见第 13 节（2026-11-17 03:53 Asia/Shanghai）：已修复刷新时反复误报工作流不完整，代码与验证完成、尚未提交，现有业务 Web 须重启加载。第 12 节的图片设计及代码微调仍保留原有暂停状态，本轮没有推进。第 11 节记录最近小时与周/月展开功能；前 10 节为历史信息，不能代替当前代码和最新交接。
 
 - 创建时间：2026-11-15 16:43 Asia/Shanghai。
 - 创建者：Codex（基于 GPT-6；环境未提供可核实的完整模型 ID，标记为 `model-unknown`）。
@@ -314,3 +314,17 @@ A2 是未完成的图片轮次，因用户认为已有成果足够而停止，�
 既有问题和后续工作见 [KNOWN-ISSUES](KNOWN-ISSUES.md)、[TODOS](TODOS.md)，本轮未发现需要新增长期条目的应用问题。恢复后的顺序是：读 GOAL/AGENTS 和本节 → 检查 Git → 建立代码微调计划 → 基于已接受方向实施和验证。当前先完成交接并停止实施。
 
 交接收尾检查：`git diff --check` 通过；7 份相关 Markdown 的 101 个本地链接全部存在；已确认 19 张原图、16 张生成图、19 份提示词；`web/`、`src/`、`tests/`、`GOAL.md` 没有本轮差异。未运行应用测试或构建，因为本轮没有代码修改。
+
+## 13. 工作流刷新完整性误报修复（2026-11-17 03:53 Asia/Shanghai）
+
+- 执行模型：Codex（基于 GPT-6；完整模型 ID 未由环境提供，使用 `model-unknown`）。
+- 来源范围：`WORKTREE`，基准完整提交 `64597a920303d75f8625c868b7f377b519443c66`；本次相关代码尚未固定为提交。开始时 `main` 与 `origin/main` 同步且工作区干净；本轮未提交或推送。
+- 用户报告 Web 总提示工作流不完整，怀疑与刷新有关。已通过回归和真实浏览器确认：已有同签名快照的 5 秒后台重解析被误标为 `pending`，使多个列表和 facets 周期性退回不完整状态。
+- `src/easyflow/_internal/dag_parser.py:116`、`src/easyflow/_internal/dag_parser.py:144` 现在只等待/标记没有当前快照的文件；首次、新增、修改仍加载，真实错误仍显示。`tests/test_web_discovery_refresh.py` 覆盖失效快照、旧 Future、增删、空文件、错误及恢复，并核对五类 API 状态。
+- 版本 `0.1.0 → 0.1.1`，同步 `pyproject.toml`、`uv.lock`、`web/package.json`；没有新增依赖或修改前端源码、构建资源、数据库、调度逻辑、设计图片与 `GOAL.md`。
+
+验证：8 项新增后端、100 项相关 Web/发现/调度/运行边界后端、37 项前端通过；实际发现 12 个示例 DAG，无错误且未执行任务。真实 1 秒慢解析 DAG 的隔离浏览器完成自动刷新、3 次手动刷新和重载，初始化收敛后不完整提示 0；新增错误文件后实际提示仍在，修复为空辅助文件后恢复。浏览器无 pageerror、无业务写操作。新测试默认 Ruff、修改文件核心规则、锁文件检查和差异检查通过；解析器默认 Ruff 仍有与基准相同的两条既有诊断，见 [KI-20261108-2311-001](known-issues/KI-20261108-2311-001-ruff-locked-baseline.md)，本轮未提交。结果及验证边界见 [修复结果](plans/PLAN-20261117-001-model-unknown-discovery-refresh-OUTCOME.md)，计划见 [修复计划](plans/PLAN-20261117-001-model-unknown-discovery-refresh.md)。
+
+本次未提交的文件为：解析器、新测试、版本声明与锁文件（`pyproject.toml`、`uv.lock`、`web/package.json`）、`docs/plans/PLAN-20261117-001-model-unknown-discovery-refresh{,-OUTCOME}.md`、`docs/plans/INDEX.md`、`docs/HANDOFF.md`、`docs/KNOWN-ISSUES.md` 和既有 Ruff 条目详情。仅这些文件属于本轮成果，不应混入其他任务改动。
+
+隔离服务使用仓库外目录 `/var/folders/gh/54w67t6n7_b8pv7t76xw5_qm0000gn/T/easyflow-refresh-check-ro5s4s7f/`，端口 `8792`、`--no-scheduler`；本轮 `refresh` 浏览器会话和该隔离进程已关闭，临时凭据不入 Git，仓库内本轮浏览器快照已移除。用户原有 `8790` 进程未重启，启动参数为 `easyflow web --dags-folder examples`，须重启 Web 才会加载后端修复；不得误称浏览器刷新已使旧 Python 进程更新。其他问题及待办仍以主索引为准，没有新增未解决的刷新相关问题。收尾核对 94 个本地 Markdown 链接均存在，三处版本一致，差异检查通过。

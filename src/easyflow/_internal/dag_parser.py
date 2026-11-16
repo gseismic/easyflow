@@ -42,6 +42,7 @@ class DagParseIssue:
 class DagDiscoveryResult:
     sources: list[DagSource]
     issues: list[DagParseIssue]
+    # 当前文件尚无解析快照；已有同签名快照的后台刷新不影响完整性。
     pending: bool = False
 
 
@@ -112,9 +113,14 @@ class AsyncDagDiscovery:
                     signature,
                     self.pool.submit(inspect_dags_from_file, path),
                 )
-        if wait_seconds and self.pending:
+        missing = [
+            future
+            for path, (_, future) in self.pending.items()
+            if path not in self.entries
+        ]
+        if wait_seconds and missing:
             wait(
-                [item[1] for item in self.pending.values()],
+                missing,
                 timeout=wait_seconds,
                 return_when=FIRST_COMPLETED,
             )
@@ -135,7 +141,7 @@ class AsyncDagDiscovery:
                 sources, key=lambda source: (source.dag_id, source.file_path.as_posix())
             ),
             issues,
-            bool(self.pending),
+            any(path not in self.entries for path in signatures),
         )
 
 
