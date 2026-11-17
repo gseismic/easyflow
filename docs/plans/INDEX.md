@@ -67,3 +67,5 @@
 - 2026-11-16 05:41 Asia/Shanghai：[图片设计范围调整与交接](PLAN-20261116-002-model-unknown-ui-polish-OUTCOME.md)，按用户要求停止补图；19 张原图、16 张 A2 图已保存，7 张设计图完成复核；代码微调已授权但暂停，源码未改，接续见 HANDOFF 第 12 节。
 - 2026-11-17 03:45 Asia/Shanghai：[工作流刷新完整性提示修复计划](PLAN-20261117-001-model-unknown-discovery-refresh.md)，待实施；区分有效快照的后台刷新和首次/变更文件加载，保留真实解析错误并执行隔离浏览器验证。
 - 2026-11-17 03:53 Asia/Shanghai：[工作流刷新完整性提示修复结果](PLAN-20261117-001-model-unknown-discovery-refresh-OUTCOME.md)，已完成（WORKTREE）；8 项新增及 100 项相关后端、37 项前端和真实慢解析浏览器验证通过，正常刷新不再误报，真实错误及恢复正常；版本 `0.1.0 → 0.1.1`，默认 Ruff 保留 2 条既有诊断，未提交或推送，业务 Web 须重启加载。
+- 2026-11-17 04:02 Asia/Shanghai：[按参考图修复侧栏协调性计划](PLAN-20261117-002-model-unknown-sidebar-alignment.md)，待实施；统一父子缩进、树形连线、箭头与选中强调，保留触屏点击空间和已有导航行为。
+- 2026-11-17 04:13 Asia/Shanghai：[侧栏协调性修复结果](PLAN-20261117-002-model-unknown-sidebar-alignment-OUTCOME.md)，已完成（WORKTREE）；37 项前端、8 项 Web 测试、构建和导航回归通过，参考图场景、长名称、多子项、黑夜、320px/390px 抽屉及异常状态检查通过；版本 `0.1.1 → 0.1.2`，刷新现有页面即可应用，未提交或推送。

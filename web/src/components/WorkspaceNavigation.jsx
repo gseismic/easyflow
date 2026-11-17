@@ -52,7 +52,7 @@ function ProjectBranch({ group, expanded, onToggle, query, selectedId, metadata,
           if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
             event.preventDefault(); onToggle(event.key === "ArrowRight");
           }
-        }}><span aria-hidden="true">{expanded ? "⌄" : "›"}</span></button>
+        }}><span aria-hidden="true" /></button>
       <a className={`navigation-project-link${currentProject ? " selected" : ""}`}
         href={navigationProjectHref(group, filters, view)} onClick={onNavigate}
         aria-current={currentProject ? "page" : undefined} title={label}>

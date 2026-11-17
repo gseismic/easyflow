@@ -328,3 +328,12 @@ A2 是未完成的图片轮次，因用户认为已有成果足够而停止，�
 本次未提交的文件为：解析器、新测试、版本声明与锁文件（`pyproject.toml`、`uv.lock`、`web/package.json`）、`docs/plans/PLAN-20261117-001-model-unknown-discovery-refresh{,-OUTCOME}.md`、`docs/plans/INDEX.md`、`docs/HANDOFF.md`、`docs/KNOWN-ISSUES.md` 和既有 Ruff 条目详情。仅这些文件属于本轮成果，不应混入其他任务改动。
 
 隔离服务使用仓库外目录 `/var/folders/gh/54w67t6n7_b8pv7t76xw5_qm0000gn/T/easyflow-refresh-check-ro5s4s7f/`，端口 `8792`、`--no-scheduler`；本轮 `refresh` 浏览器会话和该隔离进程已关闭，临时凭据不入 Git，仓库内本轮浏览器快照已移除。用户原有 `8790` 进程未重启，启动参数为 `easyflow web --dags-folder examples`，须重启 Web 才会加载后端修复；不得误称浏览器刷新已使旧 Python 进程更新。其他问题及待办仍以主索引为准，没有新增未解决的刷新相关问题。收尾核对 94 个本地 Markdown 链接均存在，三处版本一致，差异检查通过。
+
+## 14. 按用户参考图修复侧栏（2026-11-17 04:13 Asia/Shanghai）
+
+- 执行模型：Codex（基于 GPT-6；完整模型 ID 未提供，使用 `model-unknown`）。完成版本为 `WORKTREE`，最终验证基准完整提交 `de94e8ea02b73568f34aec388820fc076c098e53`；本轮未提交或推送。该基准提交是任务执行期间形成的既有刷新修复，保留其全部内容。
+- 用户提供了优化后的侧栏截图并要求修复。`web/src/workspace.css` 修正父子缩进（项目文字 52px、子项文字 60px），补齐树形连接并在末项中心收尾；桌面项目/工作流行高 32px/28px，窄屏及触屏仍至少 44px，去掉当前项及所属项目的重复加重。`web/src/components/WorkspaceNavigation.jsx` 将不同字符箭头改为同一 CSS 箭头按展开状态旋转，导航逻辑不变。
+- 版本 `0.1.1 → 0.1.2`，同步 `pyproject.toml`、`uv.lock`、`web/package.json`。前端构建保留旧资源，更新入口并新增 `index-DIXidKp1.css`、`index-BjKCI6IS.js`；现有 `http://127.0.0.1:8790` 返回新资源均为 HTTP 200，刷新页面即可加载本次侧栏修改。未重启 Web 或操作调度器；第 13 节的后端修复是否加载仍取决于原进程是否重启，不能混淆。
+- 验证：37 项前端、8 项相关 Web 测试、构建、`uv lock --locked` 和差异检查通过；既有导航七组浏览器回归通过，慢速切换最大位移 0px。另通过参考图场景、多子项、超长名称、独立滚动与底部设置、键盘、黑夜、390px/320px 抽屉和加载/空/错误/重试，pageerror 为 0、业务写请求为 0。当前 uv 不支持 `lock --check`，已改用 `--locked` 验证。
+- 本轮工作区仅涉及上述样式、装饰性箭头、版本、构建资源、侧栏设计说明、本计划/结果、索引与本节交接；没有新的未解决问题或 TODO，没有改动右侧页面、业务 API、已有设计图片或 `GOAL.md`。临时截图和验收脚本位于 `/tmp/easyflow-sidebar-JOBLpp/`，未纳入 Git。
+- 计划：[侧栏协调性修复计划](plans/PLAN-20261117-002-model-unknown-sidebar-alignment.md)；结果：[侧栏协调性修复结果](plans/PLAN-20261117-002-model-unknown-sidebar-alignment-OUTCOME.md)。本次已完成，无待实施步骤；后续如提交，应仅暂存本轮改动。

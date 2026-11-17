@@ -23,6 +23,9 @@
 }
 .workspace-shell { display: grid; grid-template-columns: 272px minmax(0, 1fr); align-items: start; }
 .workspace-navigation {
+  --navigation-project-height: 32px;
+  --navigation-workflow-height: 28px;
+  --navigation-branch-indent: 20px;
   position: sticky;
   inset: auto;
   top: 64px;
@@ -58,7 +61,7 @@
 .navigation-search { padding: 12px 16px; border-top: 1px solid var(--border); }
 .navigation-search .search-box { width: 100%; min-width: 0; max-width: none; }
 .navigation-search .search-box input { min-width: 0; font-size: 12px; }
-.navigation-scroll { min-height: 0; flex: 1; overflow: auto; overflow-anchor: none; padding: 0 8px 24px; scrollbar-gutter: stable; }
+.navigation-scroll { min-height: 0; flex: 1; overflow: auto; overflow-anchor: none; padding: 0 8px 24px; }
 .navigation-projects,
 .navigation-branch ul { padding: 0; margin: 0; list-style: none; }
 .navigation-project { min-width: 0; }
@@ -67,14 +70,21 @@
   display: grid;
   place-items: center;
   width: 44px;
-  height: 44px;
+  height: var(--navigation-project-height);
   padding: 0;
   border: 0;
   border-radius: 8px;
   color: var(--muted);
   background: transparent;
-  font-size: 20px;
 }
+.navigation-disclosure > span {
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+}
+.navigation-disclosure[aria-expanded="true"] > span { transform: rotate(45deg); }
 .navigation-disclosure:hover { background: var(--surface-hover); }
 .navigation-project-link {
   display: flex;
@@ -82,29 +92,42 @@
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
-  min-height: 44px;
-  padding: 8px;
+  min-height: var(--navigation-project-height);
+  padding: 4px 8px 4px 0;
   border-radius: 8px;
   font-size: 13px;
+  line-height: 1.5;
 }
 .navigation-project-link > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .navigation-project-link small { flex: none; font-size: 12px; color: var(--muted); }
 .navigation-project-link:hover,
 .navigation-project-link.selected { background: var(--surface-selected); color: var(--green); }
-.navigation-project.contains-current > .navigation-project-heading { color: var(--green); font-weight: 600; }
-.navigation-branch { margin: 0 0 8px 20px; padding: 0 0 4px 8px; border-left: 1px solid var(--border); }
+.navigation-branch { margin: 0 0 8px 24px; padding: 0 0 0 var(--navigation-branch-indent); }
+/* 每个分支连接到子项中线，末项的竖线也在中线结束。 */
+.navigation-branch > ul > li { position: relative; }
+.navigation-branch > ul > li::before,
+.navigation-branch > ul > li::after {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--navigation-branch-indent));
+  pointer-events: none;
+}
+.navigation-branch > ul > li::before { top: 0; bottom: 0; border-left: 1px solid var(--border); }
+.navigation-branch > ul > li:last-child::before { bottom: 50%; }
+.navigation-branch > ul > li::after { top: 50%; width: var(--navigation-branch-indent); border-top: 1px solid var(--border); }
 .navigation-workflow {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  min-height: 44px;
-  padding: 8px;
+  min-height: var(--navigation-workflow-height);
+  padding: 4px 8px;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.5;
 }
 .navigation-workflow:hover { background: var(--surface-hover); }
-.navigation-workflow.selected { background: var(--surface-selected); color: var(--green); font-weight: 600; }
+.navigation-workflow.selected { background: var(--surface-selected); color: var(--green); }
 .navigation-workflow-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .navigation-workflow-status { flex: none; color: var(--muted); font-size: 11px; font-weight: 400; }
 .navigation-state-running { color: var(--info-fg); }
@@ -112,6 +135,8 @@
 .navigation-state-success { color: var(--success-fg); }
 .navigation-state-queued { color: var(--warning-fg); }
 .navigation-pinned { padding: 8px; }
+.navigation-branch > .navigation-pinned { padding: 4px 0; }
+.navigation-branch > .navigation-pinned > small { display: block; padding: 0 8px 4px; }
 .navigation-pinned > small { color: var(--muted); font-size: 12px; }
 .navigation-message { padding: 8px; margin: 0; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 .navigation-message.error { color: var(--danger-fg); }
@@ -190,6 +215,13 @@
 .task-selector-card label { display: flex; align-items: center; gap: 16px; min-width: 0; flex: 1; color: var(--muted); font-size: 13px; }
 .task-selector-card select { width: 100%; min-width: 0; max-width: 560px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--paper); color: var(--ink); }
 html:has(.workspace-navigation:modal) { overflow: hidden; }
+
+@media (max-width: 1000px), (pointer: coarse) {
+  .workspace-navigation {
+    --navigation-project-height: 44px;
+    --navigation-workflow-height: 44px;
+  }
+}
 
 @media (max-width: 1000px) {
   .workspace-shell { grid-template-columns: minmax(0, 1fr); }
