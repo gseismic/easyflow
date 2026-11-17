@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { part, post, usePolling } from "../api";
+import { post, usePolling } from "../api";
+import { dagDetailUrl, pauseDagUrl } from "../dagApi";
 import BackfillDialog from "../components/BackfillDialog";
 import ClearDialog from "../components/ClearDialog";
 import Graph from "../components/Graph";
@@ -24,8 +25,7 @@ const runStates = {
 };
 
 export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: requestedTab, historyView, setHistoryView, backHref, onWorkflowMetadata }) {
-  const base = `/api/dags/${part(dagId)}`;
-  const detail = usePolling(base);
+  const detail = usePolling(dagDetailUrl(dagId));
   const [runId, setRunId] = useState("");
   const [taskId, setTaskId] = useState("");
   const [attempt, setAttempt] = useState("");
@@ -72,7 +72,7 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
     setBusy(true);
     setError("");
     try {
-      const result = await post(`${base}/pause`, { paused: !dag.paused });
+      const result = await post(pauseDagUrl(dagId), { paused: !dag.paused });
       setNotice(
         result.paused
           ? "已暂停：正在运行的任务会完成，其余任务等待恢复。"
@@ -178,7 +178,7 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
         <WorkflowRunHistory dagId={dagId} view={historyView} setView={setHistoryView} />
       )}
       {tab === "schedule" && <ScheduleDetails dag={dag} />}
-      {tab === "source" && isAdmin && <SourceCode base={base} runId={runId} />}
+      {tab === "source" && isAdmin && <SourceCode dagId={dagId} runId={runId} />}
       {["run", "tasks", "logs"].includes(tab) && (
         <>
           <section className="card run-overview">
@@ -319,7 +319,7 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
       )}
       {isAdmin && dialog === "trigger" && (
         <TriggerDialog
-          base={base}
+          dagId={dagId}
           paused={dag.paused}
           onClose={() => setDialog("")}
           onDone={triggered}
@@ -335,7 +335,7 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
         />
       )}
       {isAdmin && dialog === "backfill" && (
-        <BackfillDialog base={base} onClose={() => setDialog("")} />
+        <BackfillDialog dagId={dagId} onClose={() => setDialog("")} />
       )}
     </main>
   );

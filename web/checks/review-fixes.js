@@ -40,7 +40,7 @@ async (page) => {
       await route.fulfill({ status: 400, json: { detail: "浏览器验收禁止修改演示数据" } });
       return;
     }
-    if (path === "/api/dags/daily_sync") {
+    if (path === "/api/workflows/detail" && request.url().includes("dag_id=daily_sync")) {
       const response = await route.fetch();
       const dag = await response.json();
       dag.tasks.push(...special.map(task_id => ({ ...dag.tasks[0], task_id, upstream: [], downstream: [] })));

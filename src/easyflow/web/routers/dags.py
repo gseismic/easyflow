@@ -10,6 +10,7 @@ from easyflow._internal.schedules import parse_backfill_boundary
 from easyflow._internal.state_store import DagRunCapacityError
 
 router = APIRouter(prefix="/api/dags")
+query_router = APIRouter(prefix="/api/workflows")
 
 
 class PauseRequest(BaseModel):
@@ -57,11 +58,13 @@ def list_dags(request: Request):
 
 
 @router.get("/{dag_id}")
+@query_router.get("/detail")
 def dag_detail(dag_id: str, request: Request):
     return request.app.state.service.detail(dag_id)
 
 
 @router.get("/{dag_id}/source")
+@query_router.get("/source")
 def dag_source(dag_id: str, request: Request, run_id: str | None = None):
     if request.state.user.role != "admin":
         raise HTTPException(status_code=403, detail="需要管理员权限。")
@@ -69,6 +72,7 @@ def dag_source(dag_id: str, request: Request, run_id: str | None = None):
 
 
 @router.post("/{dag_id}/pause")
+@query_router.post("/pause")
 def pause_dag(dag_id: str, body: PauseRequest, request: Request):
     service = request.app.state.service
     service.source(dag_id)
@@ -77,6 +81,7 @@ def pause_dag(dag_id: str, body: PauseRequest, request: Request):
 
 
 @router.post("/{dag_id}/trigger")
+@query_router.post("/trigger")
 def trigger_dag(dag_id: str, body: TriggerRequest, request: Request):
     service = request.app.state.service
     try:
@@ -91,6 +96,7 @@ def trigger_dag(dag_id: str, body: TriggerRequest, request: Request):
 
 
 @router.post("/{dag_id}/backfill-preview")
+@query_router.post("/backfill-preview")
 def backfill_preview(dag_id: str, body: BackfillRequest, request: Request):
     service = request.app.state.service
     source = service.source(dag_id)

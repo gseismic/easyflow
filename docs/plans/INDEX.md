@@ -69,3 +69,5 @@
 - 2026-11-17 03:53 Asia/Shanghai：[工作流刷新完整性提示修复结果](PLAN-20261117-001-model-unknown-discovery-refresh-OUTCOME.md)，已完成（WORKTREE）；8 项新增及 100 项相关后端、37 项前端和真实慢解析浏览器验证通过，正常刷新不再误报，真实错误及恢复正常；版本 `0.1.0 → 0.1.1`，默认 Ruff 保留 2 条既有诊断，未提交或推送，业务 Web 须重启加载。
 - 2026-11-17 04:02 Asia/Shanghai：[按参考图修复侧栏协调性计划](PLAN-20261117-002-model-unknown-sidebar-alignment.md)，待实施；统一父子缩进、树形连线、箭头与选中强调，保留触屏点击空间和已有导航行为。
 - 2026-11-17 04:13 Asia/Shanghai：[侧栏协调性修复结果](PLAN-20261117-002-model-unknown-sidebar-alignment-OUTCOME.md)，已完成（WORKTREE）；37 项前端、8 项 Web 测试、构建和导航回归通过，参考图场景、长名称、多子项、黑夜、320px/390px 抽屉及异常状态检查通过；版本 `0.1.1 → 0.1.2`，刷新现有页面即可应用，未提交或推送。
+- 2026-11-17 09:40 Asia/Shanghai：[前端 Review 修复与循环复审计划](PLAN-20261117-003-model-unknown-frontend-review-loop.md)，进行中；修复点号 DAG 寻址、过期触发回调和重跑预览恢复，重新覆盖全部前端。
+- 2026-11-17 10:03 Asia/Shanghai：[前端 Review 修复与循环复审结果](PLAN-20261117-003-model-unknown-frontend-review-loop-OUTCOME.md)，已完成（WORKTREE）；三项修复及窄屏弹窗回归通过，38 项前端、298 项后端、最终构建、定向与导航浏览器回归及真实隔离 Web 验收通过；版本 `0.1.2 → 0.1.3`，最后一轮无待修复逻辑问题，未提交或推送，业务 Web 需重启加载新 API。

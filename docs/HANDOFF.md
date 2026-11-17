@@ -337,3 +337,13 @@ A2 是未完成的图片轮次，因用户认为已有成果足够而停止，�
 - 验证：37 项前端、8 项相关 Web 测试、构建、`uv lock --locked` 和差异检查通过；既有导航七组浏览器回归通过，慢速切换最大位移 0px。另通过参考图场景、多子项、超长名称、独立滚动与底部设置、键盘、黑夜、390px/320px 抽屉和加载/空/错误/重试，pageerror 为 0、业务写请求为 0。当前 uv 不支持 `lock --check`，已改用 `--locked` 验证。
 - 本轮工作区仅涉及上述样式、装饰性箭头、版本、构建资源、侧栏设计说明、本计划/结果、索引与本节交接；没有新的未解决问题或 TODO，没有改动右侧页面、业务 API、已有设计图片或 `GOAL.md`。临时截图和验收脚本位于 `/tmp/easyflow-sidebar-JOBLpp/`，未纳入 Git。
 - 计划：[侧栏协调性修复计划](plans/PLAN-20261117-002-model-unknown-sidebar-alignment.md)；结果：[侧栏协调性修复结果](plans/PLAN-20261117-002-model-unknown-sidebar-alignment-OUTCOME.md)。本次已完成，无待实施步骤；后续如提交，应仅暂存本轮改动。
+
+## 15. 全量前端 Review 修复闭环（2026-11-17 10:03 Asia/Shanghai）
+
+- 执行模型：Codex（基于 GPT-6；完整模型 ID 未提供，使用 `model-unknown`）。完成版本为 `WORKTREE`，基准完整提交 `e4ca538ddcf97510846dcfdfbd4a839627429c65`，分支 `main`；没有提交或推送。开始时仅已有未跟踪的全量前端 Review 报告，本轮完整保留其原文。
+- 用户明确调用 `review-fix-loop`，本轮已完成原报告的三项修复，并重新覆盖全部 49 个前端源文件及必要后端接口。`web/src/dagApi.js:1` 使用查询参数访问详情/源码/暂停/触发/回补，`src/easyflow/web/routers/dags.py:60` 复用旧处理函数提供别名，旧路径 API 保留；`web/src/components/TriggerDialog.jsx:10` 关闭/卸载后忽略旧回调；`web/src/components/ClearDialog.jsx:17` 失败使快照失效、`web/src/components/ClearDialog.jsx:77` 保留刷新入口。`web/src/index.css:1014` 修复三按钮在 320px 弹窗中挤出视口的问题。
+- 版本 `0.1.2 → 0.1.3`，同步 Python、前端及 uv 锁文件。最终静态资源为 `index-CL0aI4u-.js`、`index-BsNUirX_.css`，入口已更新，既有已跟踪资源保留；没有增加依赖、修改 SDK ID 规则、放宽清理保护或更改 `GOAL.md`。
+- 验证：298 项后端、38 项前端、最终构建、定向及导航浏览器回归、真实隔离 Web 场景均通过。特殊 ID、延迟触发响应、blocked/409/刷新失败恢复、四种宽度及 viewer 均覆盖；最终导航 57 个采样最大位移 0px，浏览器 pageerror 为 0。路由/新测试默认 Ruff、修改文件核心 Ruff、锁文件和差异检查通过；`app.py` 既有 `I001` 与基准一致，见 [KI-20261108-2311-001](known-issues/KI-20261108-2311-001-ruff-locked-baseline.md)。最后一轮没有再修改应用代码，未发现本次范围内待修复逻辑问题。
+- 浏览器实际写操作只使用 `/tmp/easyflow-review-loop-q7jX3r/` 的独立库与临时 DAG，端口 8794，没有 scheduler；三个测试运行均排队、没有执行任务。本轮临时服务和 `revfix` 浏览器均已关闭，没有操作用户原有业务 Web/调度器。**现有 Web 进程须重启后再刷新才能使用新查询 API**；未重启原进程，不能声称业务服务已加载修复。
+- 新增回归在 `tests/test_web_workflow_addressing.py`、`web/tests/dagApi.test.mjs`、`web/checks/frontend-review-loop.js`；三个旧浏览器夹具已同步详情寻址。代码、版本、资源、上述回归、本轮计划/结果、索引、HANDOFF 和 Ruff 已知问题追加记录均为未提交成果，不混入其他改动。未执行 Firefox/WebKit、真实触屏、scheduler 业务端到端及其余专用旧浏览器脚本。
+- 计划：[前端修复计划](plans/PLAN-20261117-003-model-unknown-frontend-review-loop.md)；结果：[修复与复审结果](plans/PLAN-20261117-003-model-unknown-frontend-review-loop-OUTCOME.md)。本次没有遗留的相关修复步骤或新增 TODO；长期事项仍以两个主索引为准。

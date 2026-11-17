@@ -14,6 +14,7 @@ export default function ClearDialog({ dagId, runId, taskId, onClose, onDone }) {
     try {
       await fn();
     } catch (reason) {
+      setPreview(null);
       setError(reason.message);
     } finally {
       setBusy(false);
@@ -21,6 +22,7 @@ export default function ClearDialog({ dagId, runId, taskId, onClose, onDone }) {
   };
   const inspect = () =>
     action(async () => {
+      setPreview(null);
       setPreview(
         await post(clearRunUrl(dagId, runId, true), {
           task_ids: scope === "task" ? [taskId] : null,
@@ -42,6 +44,7 @@ export default function ClearDialog({ dagId, runId, taskId, onClose, onDone }) {
           onChange={(event) => {
             setScope(event.target.value);
             setPreview(null);
+            setError("");
           }}
         >
           <option value="task">仅当前任务：{taskId}</option>
@@ -67,15 +70,14 @@ export default function ClearDialog({ dagId, runId, taskId, onClose, onDone }) {
           {error}
         </div>
       )}
-      <div className="dialog-actions">
+      <div className="dialog-actions clear-dialog-actions">
         <button className="button subtle" onClick={onClose}>
           取消
         </button>
-        {!preview ? (
-          <button className="button primary" disabled={busy} onClick={inspect}>
-            查看影响
-          </button>
-        ) : (
+        <button className={`button ${preview ? "subtle" : "primary"}`} disabled={busy} onClick={inspect}>
+          {preview ? "重新预览" : "查看影响"}
+        </button>
+        {preview && (
           <button
             className="button primary"
             disabled={

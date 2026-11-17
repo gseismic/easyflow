@@ -90,6 +90,7 @@ def create_app(*, dags_folder: str, database_url: str, log_root: str) -> FastAPI
     app.include_router(auth.router)
     app.include_router(catalog.router)
     app.include_router(dags.router)
+    app.include_router(dags.query_router)
     app.include_router(history.router)
     app.include_router(runs.router)
     app.include_router(runs.query_router)

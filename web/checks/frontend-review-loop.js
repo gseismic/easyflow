@@ -1,0 +1,252 @@
+// 在任意本机 easyflow 页运行：playwright-cli -s=<会话> run-code --filename=web/checks/frontend-review-loop.js
+// 独立浏览器上下文拦截全部 API；写操作只修改模拟记录，不接触业务库或调度器。
+async original => {
+  const origin = original.url().split('/').slice(0, 3).join('/');
+  if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(origin)) throw new Error('仅允许本机隔离环境');
+  const check = (value, message) => { if (!value) throw new Error(message); };
+  const context = await original.context().browser().newContext({ viewport: { width: 1440, height: 1000 }, timezoneId: 'Asia/Shanghai' });
+  const page = await context.newPage();
+  page.setDefaultTimeout(8000);
+  const errors = [];
+  const unexpected = [];
+  const calls = [];
+  const pendingTriggers = [];
+  let previewResponse = { to_clear: ['example'], blocked: [] };
+  let previewStatus = 200;
+  let clearStatus = 200;
+  let delayPreview = false;
+  let finishPreview;
+  let previewArrived;
+  let role = 'admin';
+  const ids = ['.', '..', 'detail', 'daily_sync'];
+  const runId = 'custom/run +%?#中文';
+  const definitions = Object.fromEntries(ids.map(dag_id => [dag_id, {
+    dag_id, task_count: 1, tasks: [{ task_id: 'example', upstream: [], downstream: [], operator_type: 'EmptyOperator' }],
+    runs: [{ run_id: runId, state: 'success', run_type: 'manual', queued_at: '2026-11-16T23:00:00Z' }],
+    schedule: '@daily', paused: false, scheduler_running: false, project_kind: 'project', project: 'review',
+    timezone: 'UTC', tags: [], latest_run: { state: 'success' }, running_count: 0,
+  }]));
+  page.on('pageerror', error => errors.push(error.message));
+  const reply = (route, data, status = 200) => route.fulfill({ status, json: data });
+  await page.route('**/api/**', async route => {
+    const request = route.request();
+    const address = request.url();
+    const path = address.split('?')[0].slice(origin.length);
+    const entries = (address.split('?')[1] || '').split('&').filter(Boolean).map(entry => entry.split('=').map(value => decodeURIComponent(value.replace(/\+/g, ' '))));
+    const get = key => entries.find(entry => entry[0] === key)?.[1];
+    const dagId = get('dag_id');
+    const definition = definitions[dagId];
+    const body = request.method() === 'POST' ? request.postDataJSON() : null;
+    calls.push({ path, dagId, runId: get('run_id'), body });
+    if (path === '/api/auth/session') return reply(route, { username: 'review-check', role, csrf_token: 'fixture' });
+    if (path === '/api/catalog') return reply(route, { loading: false, scheduler: { running: false }, issues: [] });
+    if (path === '/api/workflows/facets') return reply(route, {
+      complete: true, pending: false, groups: [{ project_kind: 'project', project: 'review', total: ids.length, matched: ids.length }],
+    });
+    if (path === '/api/workflows') return reply(route, { dags: Object.values(definitions), loading: false });
+    if (path === '/api/workflows/uptime') {
+      const start = get('start_at') ? new Date(get('start_at')).getTime() : Date.now() - 86400000;
+      const slots = Array.from({ length: 48 }, (_, i) => ({ start_at: new Date(start + i * 1800000).toISOString(), end_at: new Date(start + (i + 1) * 1800000).toISOString(), state: 'idle', run_count: 0, failed_run_count: 0 }));
+      return reply(route, { workflows: Object.fromEntries(ids.map(id => [id, slots])) });
+    }
+    if (path === '/api/workflows/detail' && definition) return reply(route, definition);
+    if (path === '/api/workflows/source' && definition) return reply(route, { content: `DAG(${JSON.stringify(dagId)})`, parsed_matches: true, run_matches: true, path: 'fixture.py' });
+    if (path === '/api/workflows/pause' && definition) {
+      definition.paused = body.paused;
+      return reply(route, { paused: body.paused });
+    }
+    if (path === '/api/workflows/trigger' && definition) return new Promise(resolve => {
+      pendingTriggers.push(async (status = 200) => {
+        await reply(route, status === 200 ? { run_id: 'created-run', paused: definition.paused, scheduler_running: false } : { detail: '触发测试错误' }, status);
+        resolve();
+      });
+    });
+    if (path === '/api/workflows/backfill-preview' && definition) return reply(route, [{ logical_date: '2026-07-01T00:00:00Z', eligible: true }]);
+    if (path === '/api/history/run') return reply(route, {
+      dag_id: dagId, run_id: get('run_id'), state: 'success', tasks: { example: 'success' },
+      task_details: { example: { state: 'success', try_number: 1 } }, definition_matches: true,
+    });
+    if (path === '/api/history/task-log') return reply(route, { content: '原始任务日志', attempts: [{ try_number: 1 }, { try_number: 2 }] });
+    if (path === '/api/history/runs') return reply(route, { runs: [{ dag_id: dagId || '.', run_id: runId, state: 'success', run_type: 'manual', project_kind: 'project', project: 'review' }], issues: [], loading: false });
+    if (path === '/api/history/runs/facets') return reply(route, { complete: true, pending: false, groups: [] });
+    if (path === '/api/runs/clear-preview') {
+      if (delayPreview) await new Promise(resolve => { finishPreview = resolve; previewArrived(); });
+      return reply(route, previewStatus === 200 ? previewResponse : { detail: '预览测试错误' }, previewStatus);
+    }
+    if (path === '/api/runs/clear') return reply(route, clearStatus === 200 ? { to_clear: body.task_ids } : { detail: '任务状态已变化或仍在运行，请重新预览。' }, clearStatus);
+    unexpected.push(`${request.method()} ${address}`);
+    return reply(route, { detail: `未预期接口：${path}` }, 404);
+  });
+  const main = page.locator('.workspace-main');
+  const tabs = main.getByRole('navigation', { name: '工作流视图' });
+  const tab = name => tabs.getByRole('link', { name, exact: true });
+  const go = async (id, view = '') => {
+    await page.evaluate(hash => { location.hash = hash; }, `#/dags/${encodeURIComponent(id)}${view ? `?tab=${view}` : ''}`);
+    await main.getByRole('heading', { name: id, exact: true }).waitFor();
+    await main.locator('.detail-load-state').waitFor({ state: 'detached' });
+  };
+  const trigger = page.getByRole('dialog', { name: '触发运行', exact: true });
+  const openTrigger = async () => {
+    await main.getByRole('button', { name: '＋ 触发运行', exact: true }).click();
+    await trigger.waitFor();
+  };
+  const submitTrigger = async () => {
+    const before = pendingTriggers.length;
+    await trigger.getByRole('button', { name: '创建运行', exact: true }).click();
+    await trigger.getByText('关闭窗口不会取消已提交的运行，可在运行记录中查看结果。', { exact: true }).waitFor();
+    check(pendingTriggers.length === before + 1, '触发未到达模拟服务');
+    return pendingTriggers.at(-1);
+  };
+  const clearDialog = page.getByRole('dialog', { name: '预览重跑', exact: true });
+  const confirm = () => clearDialog.getByRole('button', { name: '清理并等待重跑', exact: true });
+  const inspect = async (refresh = false) => {
+    await clearDialog.getByRole('button', { name: refresh ? '重新预览' : '查看影响', exact: true }).click();
+  };
+  const result = {};
+  try {
+    await page.goto(`${origin}/#/dags/.`);
+    for (const id of ids) {
+      await go(id);
+      await main.getByRole('combobox', { name: '选择运行', exact: true }).waitFor();
+      await tab('任务').click();
+      await main.locator('.graph-node').getByText('example', { exact: true }).waitFor();
+      await tab('日志').click();
+      await main.getByText('原始任务日志', { exact: true }).waitFor();
+      await main.getByLabel('执行次数', { exact: false }).selectOption('2');
+      await tab('运行历史').click();
+      await main.getByRole('region', { name: '本工作流的运行历史', exact: true }).waitFor();
+      await tab('调度详情').click();
+      await main.getByRole('heading', { name: '调度详情', exact: true }).waitFor();
+      await tab('源码').click();
+      await main.getByText(`DAG(${JSON.stringify(id)})`, { exact: true }).waitFor();
+      check(calls.some(call => call.path === '/api/workflows/source' && call.dagId === id && call.runId === runId), '源码丢失 DAG 或特殊 run_id');
+      await main.getByRole('button', { name: '暂停调度', exact: true }).click();
+      await main.getByRole('button', { name: '恢复调度', exact: true }).waitFor();
+      await tab('概览').click();
+      await main.getByRole('button', { name: '回补预览', exact: true }).click();
+      const backfill = page.getByRole('dialog', { name: '回补日期预览', exact: true });
+      await backfill.getByLabel('开始日期', { exact: true }).fill('2026-07-01');
+      await backfill.getByLabel('结束日期', { exact: true }).fill('2026-07-01');
+      await backfill.getByRole('button', { name: '预览日期', exact: true }).click();
+      await backfill.getByText('共 1 个区间，当前可创建 1 个', { exact: true }).waitFor();
+      await backfill.locator('.dialog-actions').getByRole('button', { name: '关闭', exact: true }).click();
+      await openTrigger();
+      const finish = await submitTrigger();
+      await finish();
+      await trigger.waitFor({ state: 'hidden' });
+      check(await main.getByRole('combobox', { name: '选择运行', exact: true }).inputValue() === 'created-run', '正常触发未选中新运行');
+      await page.evaluate(hash => { location.hash = hash; }, `#/history/run?dag_id=${encodeURIComponent(id)}&run_id=${encodeURIComponent(runId)}`);
+      await main.getByText('原始任务日志', { exact: true }).waitFor();
+      await main.getByRole('link', { name: '查看工作流', exact: true }).waitFor();
+    }
+    result.addressingAndSixTabs = ids;
+
+    for (const closeKind of ['button', 'escape', 'cross', 'unmount']) {
+      await go('daily_sync');
+      await openTrigger();
+      const finish = await submitTrigger();
+      if (closeKind === 'button') await trigger.getByRole('button', { name: '关闭窗口', exact: true }).click();
+      if (closeKind === 'escape') await page.keyboard.press('Escape');
+      if (closeKind === 'cross') await trigger.getByRole('button', { name: '关闭', exact: true }).click();
+      await page.evaluate(() => { location.hash = '#/settings'; });
+      await main.getByRole('heading', { name: '设置', exact: true }).waitFor();
+      await main.getByRole('radio', { name: '自动', exact: true }).check();
+      await main.getByLabel('白天开始', { exact: true }).fill('06:13');
+      await finish(closeKind === 'cross' ? 500 : 200);
+      await page.waitForTimeout(120);
+      check(page.url().endsWith('#/settings'), `${closeKind} 的旧响应改变导航`);
+      check(await main.getByLabel('白天开始', { exact: true }).inputValue() === '06:13', '旧响应丢失未保存输入');
+    }
+    await go('daily_sync');
+    await openTrigger();
+    const finishOld = await submitTrigger();
+    await trigger.getByRole('button', { name: '关闭窗口', exact: true }).click();
+    await openTrigger();
+    await trigger.getByRole('textbox').fill('{"new":true}');
+    await finishOld();
+    await page.waitForTimeout(120);
+    check(await trigger.getByRole('textbox').inputValue() === '{"new":true}', '旧响应关闭或覆盖了新窗口');
+    await trigger.getByRole('button', { name: '创建运行', exact: true }).click();
+    await trigger.getByText('关闭窗口不会取消已提交的运行，可在运行记录中查看结果。', { exact: true }).waitFor();
+    await pendingTriggers.at(-1)(500);
+    await trigger.getByRole('alert').getByText('触发测试错误', { exact: true }).waitFor();
+    check(await trigger.getByRole('button', { name: '创建运行', exact: true }).isEnabled(), '有效请求失败后不能重试');
+    await trigger.getByRole('button', { name: '取消', exact: true }).click();
+    result.expiredTriggerCallbacks = ['关闭窗口', 'Esc', '关闭按钮', '卸载', '重开', '有效失败'];
+
+    await go('daily_sync', 'logs');
+    await main.getByRole('button', { name: '预览重跑', exact: true }).click();
+    previewResponse = { to_clear: [], blocked: [{ task_id: 'example', reason: '任务仍在运行' }] };
+    await inspect();
+    await clearDialog.getByText('example：任务仍在运行', { exact: true }).waitFor();
+    check(await confirm().isDisabled(), '阻塞预览允许确认');
+    previewResponse = { to_clear: ['example'], blocked: [] };
+    await inspect(true);
+    await page.waitForFunction(() => ![...document.querySelectorAll('dialog button')].find(node => node.textContent.trim() === '清理并等待重跑')?.disabled);
+    clearStatus = 409;
+    await confirm().click();
+    await clearDialog.getByRole('alert').getByText('任务状态已变化或仍在运行，请重新预览。', { exact: true }).waitFor();
+    check(await confirm().count() === 0, '409 后仍能提交旧快照');
+    await inspect();
+    await confirm().waitFor();
+    previewStatus = 500;
+    await inspect(true);
+    await clearDialog.getByRole('alert').getByText('预览测试错误', { exact: true }).waitFor();
+    check(await confirm().count() === 0, '刷新失败后仍能提交旧快照');
+    previewStatus = 200;
+    delayPreview = true;
+    const seen = new Promise(resolve => { previewArrived = resolve; });
+    await inspect();
+    await seen;
+    check(await clearDialog.getByRole('combobox').isDisabled(), '预览期间范围未锁定');
+    finishPreview();
+    await confirm().waitFor();
+    delayPreview = false;
+    await clearDialog.getByRole('combobox').selectOption('all');
+    check(await confirm().count() === 0, '切换范围仍保留旧快照');
+    previewResponse = { to_clear: ['example', 'historical-task'], blocked: [] };
+    await inspect();
+    await clearDialog.getByText('将清理 2 个任务', { exact: true }).waitFor();
+    clearStatus = 200;
+    await confirm().click();
+    await clearDialog.waitFor({ state: 'hidden' });
+    const clearCalls = calls.filter(call => call.path === '/api/runs/clear');
+    check(JSON.stringify(clearCalls.map(call => call.body.task_ids)) === JSON.stringify([['example'], ['example', 'historical-task']]), '确认未使用新预览任务范围');
+    result.previewRecovery = ['blocked 刷新', '409 失效', '刷新失败失效', '范围锁定', '新快照确认'];
+
+    for (const width of [320, 390, 768, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.waitForFunction(() => document.querySelector('#workspace-navigation').open === (innerWidth > 1000));
+      await main.getByRole('button', { name: '预览重跑', exact: true }).click();
+      await inspect();
+      await confirm().waitFor();
+      check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${width}px 文档溢出`);
+      check(await clearDialog.getByRole('button', { name: '重新预览', exact: true }).isVisible(), '窄屏刷新预览不可达');
+      check(await clearDialog.evaluate(node => {
+        const dialog = node.getBoundingClientRect();
+        return [...node.querySelectorAll('.dialog-actions button')].every(button => {
+          const box = button.getBoundingClientRect();
+          return box.left >= Math.max(0, dialog.left) && box.right <= Math.min(innerWidth, dialog.right);
+        });
+      }), `${width}px 操作按钮超出弹窗或视口`);
+      await page.keyboard.press('Escape');
+    }
+    role = 'viewer';
+    await page.goto(`${origin}/#/dags/..`);
+    await page.reload();
+    await main.getByRole('heading', { name: '..', exact: true }).waitFor();
+    await main.getByRole('combobox', { name: '选择运行', exact: true }).waitFor();
+    check(await main.getByRole('link', { name: '源码', exact: true }).count() === 0, 'viewer 暴露源码');
+    check(await main.getByRole('button', { name: /触发运行|暂停调度|恢复调度/ }).count() === 0, 'viewer 暴露管理操作');
+    check(errors.length === 0, `浏览器异常：${errors.join('; ')}`);
+    check(unexpected.length === 0, `未覆盖接口：${unexpected.join('; ')}`);
+    result.viewportAndViewer = [320, 390, 768, 1440];
+    result.pageErrors = errors.length;
+    return result;
+  } catch (error) {
+    throw new Error(`已完成 ${JSON.stringify(result)}；${error.message}；未预期接口 ${unexpected.join('; ')}`);
+  } finally {
+    finishPreview?.();
+    await context.close();
+  }
+}

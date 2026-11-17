@@ -1,11 +1,21 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { post } from "../api";
+import { triggerDagUrl } from "../dagApi";
 import Modal from "./Modal";
 
-export default function TriggerDialog({ base, paused, onClose, onDone }) {
+export default function TriggerDialog({ dagId, paused, onClose, onDone }) {
   const [conf, setConf] = useState("{}");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const active = useRef(true);
+  useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
+  const close = () => {
+    active.current = false;
+    onClose();
+  };
   const submit = async (event) => {
     event.preventDefault();
     setBusy(true);
@@ -19,17 +29,19 @@ export default function TriggerDialog({ base, paused, onClose, onDone }) {
       }
       if (!value || typeof value !== "object" || Array.isArray(value))
         throw new Error("运行参数必须是 JSON 对象。");
-      onDone(await post(`${base}/trigger`, { conf: value }));
+      const result = await post(triggerDagUrl(dagId), { conf: value });
+      if (active.current) onDone(result);
     } catch (reason) {
-      setError(reason.message);
+      if (active.current) setError(reason.message);
     } finally {
-      setBusy(false);
+      if (active.current) setBusy(false);
     }
   };
   return (
-    <Modal title="触发运行" onClose={onClose}>
+    <Modal title="触发运行" onClose={close}>
       <form onSubmit={submit}>
         <p>创建一次手动运行。任务可能对外部系统产生影响。</p>
+        {busy && <p className="hint">关闭窗口不会取消已提交的运行，可在运行记录中查看结果。</p>}
         {paused && (
           <div className="notice warning">
             工作流已暂停；运行会在恢复后开始。
@@ -50,8 +62,8 @@ export default function TriggerDialog({ base, paused, onClose, onDone }) {
           </div>
         )}
         <div className="dialog-actions">
-          <button type="button" className="button subtle" onClick={onClose}>
-            取消
+          <button type="button" className="button subtle" onClick={close}>
+            {busy ? "关闭窗口" : "取消"}
           </button>
           <button className="button primary" disabled={busy}>
             创建运行

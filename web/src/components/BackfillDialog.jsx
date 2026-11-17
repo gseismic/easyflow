@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { post } from "../api";
+import { backfillPreviewUrl } from "../dagApi";
 import Modal from "./Modal";
 import { formatTime } from "./Status";
 
-export default function BackfillDialog({ base, onClose }) {
+export default function BackfillDialog({ dagId, onClose }) {
   const [precise, setPrecise] = useState(false);
   const [dates, setDates] = useState({
     start_date: "",
@@ -29,7 +30,7 @@ export default function BackfillDialog({ base, onClose }) {
             end_date: new Date(dates.end_date).toISOString(),
           }
         : dates;
-      setPreview(await post(`${base}/backfill-preview`, payload));
+      setPreview(await post(backfillPreviewUrl(dagId), payload));
     } catch (reason) {
       setError(reason.message);
     } finally {

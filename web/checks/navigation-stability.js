@@ -56,8 +56,8 @@ async original => {
       task_details: {}, definition_matches: false,
     });
     if (path === '/api/history/task-log') return reply(route, { content: '历史任务日志仍可读取', attempts: [{ try_number: 1 }] });
-    if (path.startsWith('/api/dags/')) {
-      const id = decodeURIComponent(path.slice('/api/dags/'.length));
+    if (path === '/api/workflows/detail') {
+      const id = params.get('dag_id');
       requests.set(id, (requests.get(id) || 0) + 1);
       const failed = failures.has(id);
       const definition = overrides.get(id) || rows.find(item => item.dag_id === id);

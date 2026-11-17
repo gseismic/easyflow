@@ -1011,6 +1011,7 @@ tbody tr:hover {
   gap: 8px;
   margin-top: 24px;
 }
+.clear-dialog-actions { flex-wrap: wrap; }
 .preview-box {
   padding: 16px;
   margin-top: 16px;

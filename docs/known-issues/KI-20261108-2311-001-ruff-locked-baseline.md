@@ -90,3 +90,10 @@
 - 依据版本：`WORKTREE`，基准完整提交 `64597a920303d75f8625c868b7f377b519443c66`；相关 Python 改动为 `src/easyflow/_internal/dag_parser.py`、`tests/test_web_discovery_refresh.py`，尚未提交。
 - 使用同一默认 Ruff 分别检查导出的基准解析器及当前解析器，按规则与信息计数，两者均有 `BLE001`、`S102` 各一条，新增 0。新测试文件默认检查、这两个文件的 `--select E4,E7,E9,F` 及差异检查通过。没有重跑全仓默认 Ruff，不把两条诊断描述为全仓诊断总数，也不描述为默认检查通过。
 - 8 项新增回归、100 项相关后端、37 项前端及隔离浏览器通过；关联结果为 `docs/plans/PLAN-20261117-001-model-unknown-discovery-refresh-OUTCOME.md`。本次没有提交或推送。
+
+## 2026-11-17 10:03 Asia/Shanghai：前端修复关联路由的针对性基线复核
+
+- 更新模型：Codex（基于 GPT-6；完整模型 ID 未由环境提供，使用 `model-unknown`）。状态保持未解决，本次没有更改 lint 策略。
+- 依据版本：`WORKTREE`，基准完整提交 `e4ca538ddcf97510846dcfdfbd4a839627429c65`；本次相关 Python 修改为 `src/easyflow/web/app.py`、`src/easyflow/web/routers/dags.py`、新增 `tests/test_web_workflow_addressing.py`，尚未提交。
+- 默认 Ruff 检查 `app.py` 得到既有导入排序 `I001` 一项；将同一基准文件导出到临时目录、使用同一 Ruff 检查，诊断规则、位置和信息相同，新增 0 项。路由和新测试文件的默认 Ruff 通过，三个修改文件的 `--select E4,E7,E9,F` 通过。未执行全仓默认 Ruff，不将这一项描述为全仓诊断数量或默认全仓检查通过。
+- 关联结果：`docs/plans/PLAN-20261117-003-model-unknown-frontend-review-loop-OUTCOME.md`；298 项后端、38 项前端、最终构建及隔离浏览器验收通过。本次没有提交或推送。

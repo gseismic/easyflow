@@ -1,8 +1,9 @@
-import { part, usePolling } from "../api";
+import { usePolling } from "../api";
+import { dagSourceUrl } from "../dagApi";
 
-export default function SourceCode({ base, runId }) {
+export default function SourceCode({ dagId, runId }) {
   const source = usePolling(
-    `${base}/source${runId ? `?run_id=${part(runId)}` : ""}`,
+    dagSourceUrl(dagId, runId),
     30000,
   );
   return (

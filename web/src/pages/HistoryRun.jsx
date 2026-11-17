@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { part, usePolling } from "../api";
+import { dagDetailUrl } from "../dagApi";
 import RunMetadata from "../components/RunMetadata";
 import Status from "../components/Status";
 import TaskDetails from "../components/TaskDetails";
@@ -10,7 +11,7 @@ export default function HistoryRun({ dagId, runId, requestedTaskId, requestedAtt
   const [taskId, setTaskId] = useState("");
   const [attempt, setAttempt] = useState("");
   const run = usePolling(runDetailUrl(dagId, runId), 3000);
-  const dag = usePolling(`/api/dags/${part(dagId)}`);
+  const dag = usePolling(dagDetailUrl(dagId));
   useEffect(() => {
     if (dag.data && !dag.error) onWorkflowMetadata?.(dag.data);
     else if (dag.error) onWorkflowMetadata?.({ dag_id: dagId, unavailable: true });

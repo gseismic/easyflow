@@ -34,7 +34,7 @@ async original => {
       const response = await route.fetch();
       return route.fulfill({ response, json: { ...(await response.json()), role: 'viewer' } });
     }
-    if (path === `/api/dags/${encodeURIComponent(longId)}`) return route.fulfill(longError ? { status: 503, json: { detail: '模拟加载失败' } } : { json: longDefinition });
+    if (path === '/api/workflows/detail' && request.url().includes(`dag_id=${encodeURIComponent(longId)}`)) return route.fulfill(longError ? { status: 503, json: { detail: '模拟加载失败' } } : { json: longDefinition });
     return route.continue();
   });
   const main = page.locator('.workspace-main');
