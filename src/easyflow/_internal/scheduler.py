@@ -6,7 +6,7 @@ import sys
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -14,11 +14,17 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from easyflow._internal.dag_parser import DagSource, load_dag_snapshot
-from easyflow._internal.persistent_runner import PersistentDagRunner, validate_executor
+from easyflow._internal.persistent_runner import (
+    PersistentDagRunner,
+    PersistentRunResult,
+    validate_executor,
+)
 from easyflow._internal.schedules import (
     MAX_CATCHUP_PER_SCAN,
     backfill_intervals,
+    backfill_logical_date_bounds,
     dag_timezone,
+    iter_backfill_intervals,
     scheduler_intervals,
 )
 from easyflow._internal.state_store import (
@@ -53,6 +59,7 @@ class BackfillSummary:
     runs: list[ScheduledRunSummary]
     complete: bool = True
     pending: tuple[datetime, ...] = ()
+    pending_range: tuple[datetime, datetime] | None = None
 
 
 @dataclass(frozen=True)
@@ -221,11 +228,39 @@ def _run_sources_with_lease(
     parallelism: int,
     heartbeat: _SchedulerHeartbeat,
 ) -> tuple[list[ScheduledRunSummary], list[SchedulerIssue]]:
-    with SchedulerCoordinator(
-        store, heartbeat, log_root, executor, parallelism
-    ) as coordinator:
-        coordinator.submit(sources, now)
-        return coordinator.collect(wait=True)
+    stopped = threading.Event()
+    runner = PersistentDagRunner(
+        store,
+        log_root=log_root,
+        should_continue=lambda: not heartbeat.lost.is_set() and not stopped.is_set(),
+        scheduler_fence=heartbeat.fence,
+    )
+    summaries: list[ScheduledRunSummary] = []
+    issues: list[SchedulerIssue] = []
+    with ThreadPoolExecutor(max_workers=64, thread_name_prefix="easyflow-dag") as pool:
+        futures = {
+            pool.submit(
+                _run_scheduler_source_once,
+                source=source,
+                runner=runner,
+                now=now,
+                executor=executor,
+                parallelism=parallelism,
+            ): source
+            for source in sources
+        }
+        for future in as_completed(futures):
+            source = futures[future]
+            try:
+                summaries.extend(future.result())
+            except SchedulerLeaseLost:
+                stopped.set()
+                raise
+            except Exception as exc:  # noqa: BLE001 - 单个 DAG 调度失败不阻断其他 DAG。
+                issues.append(SchedulerIssue(source.dag_id, source.file_path, str(exc)))
+    if heartbeat.lost.is_set():
+        raise SchedulerLeaseLost("scheduler lease 已丢失，停止调度。")
+    return sorted(summaries, key=lambda item: (item.dag_id, item.run_id)), issues
 
 
 class SchedulerCoordinator:
@@ -238,18 +273,25 @@ class SchedulerCoordinator:
         parallelism: int,
     ) -> None:
         validate_executor(executor)
-        self.store = store
         self.heartbeat = heartbeat
-        self.log_root = log_root
         self.executor = executor
         self.parallelism = parallelism
         self.stopped = threading.Event()
+        self.runner = PersistentDagRunner(
+            store,
+            log_root=log_root,
+            should_continue=lambda: (
+                not heartbeat.lost.is_set() and not self.stopped.is_set()
+            ),
+            scheduler_fence=heartbeat.fence,
+        )
         self.pool = ThreadPoolExecutor(
-            max_workers=64, thread_name_prefix="easyflow-dag"
+            max_workers=64, thread_name_prefix="easyflow-run"
         )
         self.pending: dict[
-            str, tuple[DagSource, Future[list[ScheduledRunSummary]]]
+            tuple[str, str], tuple[DagSource, Future[PersistentRunResult]]
         ] = {}
+        self.issues: list[SchedulerIssue] = []
 
     def __enter__(self) -> SchedulerCoordinator:
         return self
@@ -262,39 +304,48 @@ class SchedulerCoordinator:
         if self.heartbeat.lost.is_set():
             raise SchedulerLeaseLost("scheduler lease 已丢失，停止调度。")
         for source in sources:
-            if source.dag_id in self.pending:
+            try:
+                run_ids, _ = _scan_scheduled_runs(source, self.runner, now)
+            except SchedulerLeaseLost:
+                raise
+            except Exception as exc:  # noqa: BLE001 - 继续扫描其余 DAG。
+                self.issues.append(
+                    SchedulerIssue(source.dag_id, source.file_path, str(exc))
+                )
                 continue
-            future = self.pool.submit(
-                _run_scheduler_source_once,
-                source=source,
-                store=self.store,
-                now=now,
-                log_root=self.log_root,
-                executor=self.executor,
-                parallelism=self.parallelism,
-                should_continue=lambda: (
-                    not self.heartbeat.lost.is_set() and not self.stopped.is_set()
-                ),
-                scheduler_fence=self.heartbeat.fence,
-            )
-            self.pending[source.dag_id] = (source, future)
+            for run_id in run_ids:
+                key = (source.dag_id, run_id)
+                if key in self.pending:
+                    continue
+                future = self.pool.submit(
+                    self.runner.run_existing,
+                    source.dag,
+                    run_id=run_id,
+                    file_path=source.file_path,
+                    executor=self.executor,
+                    parallelism=self.parallelism,
+                    wait_for_retry=False,
+                )
+                self.pending[key] = (source, future)
 
     def collect(
         self, *, wait: bool = False
     ) -> tuple[list[ScheduledRunSummary], list[SchedulerIssue]]:
         summaries: list[ScheduledRunSummary] = []
-        issues: list[SchedulerIssue] = []
-        futures = {future: source for source, future in self.pending.values()}
+        issues, self.issues = self.issues, []
+        futures = {future: key for key, (_, future) in self.pending.items()}
         ready = (
             as_completed(futures)
             if wait
             else (future for future in futures if future.done())
         )
         for future in ready:
-            source = futures[future]
-            self.pending.pop(source.dag_id, None)
+            source, _ = self.pending.pop(futures[future])
             try:
-                summaries.extend(future.result())
+                result = future.result()
+                summaries.append(
+                    ScheduledRunSummary(result.run_id, result.state, result.dag_id)
+                )
             except SchedulerLeaseLost:
                 raise
             except Exception as exc:  # noqa: BLE001 - 单个 DAG 调度失败不阻断其他 DAG。
@@ -304,75 +355,69 @@ class SchedulerCoordinator:
         return sorted(summaries, key=lambda item: (item.dag_id, item.run_id)), issues
 
 
+def _scan_scheduled_runs(
+    source: DagSource, runner: PersistentDagRunner, now: datetime
+) -> tuple[list[str], bool]:
+    dag = source.dag
+    store = runner.store
+    if not runner.should_continue() or store.is_dag_paused(dag.dag_id):
+        return [], False
+    run_ids = store.list_active_dag_runs(dag.dag_id)
+    intervals = scheduler_intervals(
+        dag,
+        now,
+        last_automated_date=store.latest_automated_logical_date(dag.dag_id),
+    )
+    backfilled = (
+        store.backfilled_logical_dates(
+            dag.dag_id, intervals[0].logical_date, intervals[-1].logical_date
+        )
+        if intervals
+        else set()
+    )
+    last_skipped = None
+    scanned_all = False
+    for interval in intervals:
+        if not runner.should_continue():
+            break
+        if interval.logical_date.astimezone(timezone.utc).isoformat() in backfilled:
+            last_skipped = interval.logical_date
+            continue
+        try:
+            run_ids.append(
+                runner.create_scheduled_run(
+                    dag, file_path=source.file_path, interval=interval
+                )
+            )
+        except ScheduledRunExists:
+            last_skipped = interval.logical_date
+            continue
+        except (DagPaused, DagRunCapacityError):
+            break
+        last_skipped = None
+    else:
+        scanned_all = True
+    if last_skipped is not None and runner.should_continue():
+        store.advance_schedule_cursor(
+            dag.dag_id, last_skipped, scheduler_fence=runner.scheduler_fence
+        )
+    return run_ids, scanned_all and len(intervals) == MAX_CATCHUP_PER_SCAN
+
+
 def _run_scheduler_source_once(
     *,
     source: DagSource,
-    store: SQLiteStateStore,
+    runner: PersistentDagRunner,
     now: datetime,
-    log_root: str | Path,
     executor: str,
     parallelism: int,
-    should_continue: Callable[[], bool] | None = None,
-    scheduler_fence: SchedulerFence | None = None,
 ) -> list[ScheduledRunSummary]:
-    validate_executor(executor)
     dag = source.dag
-    allowed = should_continue or (lambda: True)
-    runner = PersistentDagRunner(
-        store,
-        log_root=log_root,
-        should_continue=allowed,
-        scheduler_fence=scheduler_fence,
-    )
     summaries: list[ScheduledRunSummary] = []
-    while allowed():
-        if store.is_dag_paused(dag.dag_id):
-            break
-        run_ids = store.list_active_dag_runs(dag.dag_id)
-        intervals = scheduler_intervals(
-            dag,
-            now,
-            last_automated_date=store.latest_automated_logical_date(dag.dag_id),
-        )
-        backfilled = (
-            store.backfilled_logical_dates(
-                dag.dag_id, intervals[0].logical_date, intervals[-1].logical_date
-            )
-            if intervals
-            else set()
-        )
-        last_covered = None
-        last_skipped = None
-        for interval in intervals:
-            if not allowed():
-                break
-            if interval.logical_date.astimezone(timezone.utc).isoformat() in backfilled:
-                last_covered = interval.logical_date
-                last_skipped = interval.logical_date
-                continue
-            try:
-                run_ids.append(
-                    runner.create_scheduled_run(
-                        dag, file_path=source.file_path, interval=interval
-                    )
-                )
-            except ScheduledRunExists:
-                last_covered = interval.logical_date
-                last_skipped = interval.logical_date
-                continue
-            except DagPaused:
-                break
-            except DagRunCapacityError:
-                break
-            last_covered = interval.logical_date
-            last_skipped = None
-        if last_skipped is not None:
-            store.advance_schedule_cursor(dag.dag_id, last_skipped)
+    while runner.should_continue():
+        run_ids, more_intervals = _scan_scheduled_runs(source, runner, now)
         if not run_ids:
-            if (
-                len(intervals) == MAX_CATCHUP_PER_SCAN
-                and last_covered == intervals[-1].logical_date
-            ):
+            if more_intervals:
                 continue
             break
         with ThreadPoolExecutor(max_workers=len(run_ids)) as pool:
@@ -466,29 +511,40 @@ def create_backfill(
     dag = load_dag_snapshot(file_path, dag_id)
     if max_active_runs is not None and max_active_runs < 1:
         raise ValueError("max_active_runs 必须大于 0。")
-    intervals = _backfill_intervals(dag, start_date, end_date)
-    if not intervals:
-        backfill_id = backfill_id or f"backfill__{uuid.uuid4().hex}"
-        return BackfillSummary(backfill_id=backfill_id, runs=[])
+    bounds = backfill_logical_date_bounds(
+        dag.schedule,
+        start_date,
+        end_date,
+        dag_timezone(dag),
+        anchor=dag.start_date,
+        start_bound=dag.start_date,
+        end_bound=dag.end_date,
+    )
     backfill_id = backfill_id or f"backfill__{uuid.uuid4().hex}"
+    if bounds is None:
+        return BackfillSummary(backfill_id=backfill_id, runs=[])
+    first, last = bounds
     store.create_backfill(
         backfill_id=backfill_id,
         dag_id=dag.dag_id,
-        start_logical_date=intervals[0].logical_date,
-        end_logical_date=intervals[-1].logical_date,
+        start_logical_date=first,
+        end_logical_date=last,
         reprocessing_behavior=reprocessing_behavior,
         max_active_runs=max_active_runs,
     )
     runner = PersistentDagRunner(store, log_root=log_root)
     summaries: list[ScheduledRunSummary] = []
-    index = 0
-    batch_size = min(max_active_runs or 1, len(intervals))
+    intervals = iter_backfill_intervals(dag.schedule, first, last)
+    current = next(intervals, None)
+    batch_size = max_active_runs or 1
     with ThreadPoolExecutor(max_workers=batch_size) as pool:
-        while index < len(intervals):
+        while current is not None:
             batch = []
             capacity_full = False
-            while index < len(intervals) and len(batch) < batch_size:
-                interval = intervals[index]
+            for _ in range(batch_size):
+                if current is None:
+                    break
+                interval = current
                 try:
                     run_id = runner.create_backfill_run(
                         dag,
@@ -499,12 +555,11 @@ def create_backfill(
                         reprocessing_behavior=reprocessing_behavior,
                     )
                 except BackfillRunNotEligible:
-                    index += 1
+                    current = next(intervals, None)
                     continue
                 except DagRunCapacityError:
                     capacity_full = True
                     break
-                index += 1
                 future = pool.submit(
                     runner.run_existing,
                     dag,
@@ -514,6 +569,7 @@ def create_backfill(
                     parallelism=parallelism,
                 )
                 batch.append((interval, future))
+                current = next(intervals, None)
             pending = []
             for interval, future in batch:
                 result = future.result()
@@ -524,9 +580,20 @@ def create_backfill(
                 )
                 if result.state in {DagRunState.QUEUED, DagRunState.RUNNING}:
                     pending.append(interval.logical_date)
-            if capacity_full or pending:
-                pending.extend(item.logical_date for item in intervals[index:])
-                return BackfillSummary(backfill_id, summaries, False, tuple(pending))
+            if (
+                capacity_full
+                or pending
+                or (current is not None and store.is_dag_paused(dag_id))
+            ):
+                return BackfillSummary(
+                    backfill_id,
+                    summaries,
+                    complete=False,
+                    pending=tuple(pending),
+                    pending_range=(current.logical_date, last)
+                    if current is not None
+                    else None,
+                )
     return BackfillSummary(backfill_id=backfill_id, runs=summaries)
 
 

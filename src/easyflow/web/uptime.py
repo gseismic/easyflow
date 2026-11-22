@@ -93,6 +93,10 @@ def workflow_uptime(
     else:
         raise ValueError("uptime 粒度必须为 half_hour 或 day。")
     as_of = current.timestamp()
+    # 最近窗口止于 now，实时快照使用最后一格，历史事件仍按半开区间归入。
+    current_position = None
+    if start.timestamp() <= as_of < end.timestamp() or lookback_hours is not None:
+        current_position = min(len(boundaries) - 2, bisect_right(boundaries, as_of) - 1)
     ids = list(dict.fromkeys(dag_ids))
     with sqlite3.connect(database) as connection:
         connection.row_factory = sqlite3.Row
@@ -123,7 +127,7 @@ def workflow_uptime(
                 CROSS JOIN dag_run r ON r.dag_id = t.dag_id AND r.run_id = t.run_id
                 WHERE COALESCE(julianday(t.ended_at), 1e100) >= :start_jd
                     AND COALESCE(julianday(t.started_at), 0) < :end_jd
-                    AND t.started_at IS NOT NULL AND uptime_time(t.started_at) < :end
+                    AND t.started_at IS NOT NULL AND uptime_time(t.started_at) <= :end
                 UNION ALL
                 SELECT r.dag_id, r.run_id, uptime_time(r.start_date),
                     MIN(COALESCE(uptime_time(r.end_date), :now), :now),
@@ -132,22 +136,30 @@ def workflow_uptime(
                 WHERE r.start_date IS NOT NULL AND r.state != 'queued'
                     AND COALESCE(julianday(r.end_date), 1e100) >= :start_jd
                     AND COALESCE(julianday(r.start_date), 0) < :end_jd
-                    AND uptime_time(r.start_date) < :end
+                    AND uptime_time(r.start_date) <= :end
                     AND NOT EXISTS (
                         SELECT 1 FROM task_try t
                         WHERE t.dag_id = r.dag_id AND t.run_id = r.run_id
                     )
             )
             SELECT s.position, a.dag_id, COUNT(DISTINCT a.run_id) AS run_count,
-                COUNT(DISTINCT CASE WHEN a.running AND s.start <= :now AND :now < s.end
+                COUNT(DISTINCT CASE WHEN a.running AND s.position = :current_position
                     THEN a.run_id END) AS running_count,
                 MIN(a.run_id) AS sample_run_id
             FROM intervals a JOIN uptime_slots s
-                ON a.started < s.end AND a.started <= :now
-                AND (a.ended > s.start OR (a.ended = a.started AND a.started >= s.start))
+                ON a.started <= :now AND (
+                    (a.started < s.end
+                     AND (a.ended > s.start OR (a.ended = a.started AND a.started >= s.start)))
+                    OR (a.running AND s.position = :current_position)
+                )
             GROUP BY s.position, a.dag_id
             """,
-            {**_range_params(start, end), "end": end.timestamp(), "now": as_of},
+            {
+                **_range_params(start, end),
+                "end": end.timestamp(),
+                "now": as_of,
+                "current_position": current_position,
+            },
         ).fetchall()
         failures = connection.execute(
             """
@@ -219,11 +231,9 @@ def workflow_uptime(
             run_count=row["run_count"],
             sample_run_id=row["sample_run_id"],
         )
-    if start.timestamp() <= as_of < end.timestamp() or lookback_hours is not None:
-        # 最近窗口止于 now；等待是该时刻的快照，仍应显示在最后一格。
-        position = min(len(boundaries) - 2, bisect_right(boundaries, as_of) - 1)
+    if current_position is not None:
         for row in waiting:
-            slot = workflows[row["dag_id"]][position]
+            slot = workflows[row["dag_id"]][current_position]
             slot["waiting_run_count"] = row["waiting_run_count"]
             if slot["state"] != "running":
                 slot.update(state="waiting", sample_run_id=row["sample_run_id"])

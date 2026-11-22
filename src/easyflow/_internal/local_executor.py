@@ -3,7 +3,9 @@ from __future__ import annotations
 import multiprocessing
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import IntEnum
 from pathlib import Path
 from typing import Any, Callable
 
@@ -22,9 +24,23 @@ from easyflow._internal.state_store import (
     SchedulerLeaseLost,
     SQLiteStateStore,
     run_timezone,
+    task_retry_settings,
 )
 from easyflow.sdk.states import TaskInstanceState
-from easyflow.sdk.testing import TERMINAL_STATES, _dependency_decision
+from easyflow.sdk.testing import TERMINAL_STATES, _dependency_decision, _resolve_retries
+
+
+class _WorkerOutcome(IntEnum):
+    LEASE_LOST = 1
+    DAG_PAUSED = 2
+
+
+@dataclass
+class _Worker:
+    process: multiprocessing.Process
+    ready: Any
+    outcome: Any
+    launched_at: float
 
 
 class LocalExecutor:
@@ -64,42 +80,56 @@ class LocalExecutor:
         self.wait_for_retry = wait_for_retry
 
     def run(self) -> dict[str, TaskInstanceState | None]:
+        active: dict[str, _Worker] = {}
+        try:
+            return self._run(active)
+        finally:
+            for worker in active.values():
+                if worker.process.is_alive():
+                    worker.process.terminate()
+                worker.process.join()
+
+    def _run(self, active: dict[str, _Worker]) -> dict[str, TaskInstanceState | None]:
         context = multiprocessing.get_context("spawn")
-        active: dict[str, multiprocessing.Process] = {}
-        ready_events: dict[str, Any] = {}
-        started_at: dict[str, float] = {}
         ordered_tasks = self.dag.topological_sort()
         max_active = min(self.parallelism, self.max_active_tasks)
 
         while True:
             if not self.should_continue():
-                for process in active.values():
-                    process.terminate()
-                    process.join()
                 return self.store.list_task_states(self.dag.dag_id, self.run_id)
-            for task_id, process in list(active.items()):
+            for task_id, worker in list(active.items()):
+                process = worker.process
                 if (
                     process.is_alive()
-                    and not ready_events[task_id].is_set()
-                    and time.monotonic() - started_at[task_id] > PARSER_TIMEOUT_SECONDS
+                    and not worker.ready.is_set()
+                    and time.monotonic() - worker.launched_at > PARSER_TIMEOUT_SECONDS
                 ):
                     process.terminate()
                     process.join()
                 if not process.is_alive():
                     process.join()
                     active.pop(task_id)
-                    ready_events.pop(task_id)
-                    started_at.pop(task_id)
-                    if process.exitcode == 75:
-                        for other in active.values():
-                            other.terminate()
-                            other.join()
+                    if worker.outcome.value == _WorkerOutcome.LEASE_LOST:
                         raise SchedulerLeaseLost("scheduler lease 已丢失，停止调度。")
-                    if process.exitcode == 77:
+                    if worker.outcome.value == _WorkerOutcome.DAG_PAUSED:
                         continue
                     state = self.store.get_task_state(
                         self.dag.dag_id, self.run_id, task_id
                     )
+                    if state == TaskInstanceState.RUNNING:
+                        task = self.dag.get_task(task_id)
+                        delay, factor, maximum = task_retry_settings(self.dag, task)
+                        self.store.recover_orphaned_task(
+                            dag_id=self.dag.dag_id,
+                            run_id=self.run_id,
+                            task_id=task_id,
+                            retries=_resolve_retries(self.dag, task),
+                            retry_delay=delay,
+                            retry_factor=factor,
+                            max_retry_delay=maximum,
+                            worker_exit=(process.pid, process.exitcode),
+                        )
+                        continue
                     if (
                         process.exitcode == 0
                         and state == TaskInstanceState.UP_FOR_RETRY
@@ -120,9 +150,6 @@ class LocalExecutor:
 
             record = self.store.get_dag_run(self.dag.dag_id, self.run_id)
             if record is not None and record.state == "failed":
-                for process in active.values():
-                    process.terminate()
-                    process.join()
                 return self.store.list_task_states(self.dag.dag_id, self.run_id)
 
             self.store.recover_orphaned_tasks_for_run(dag=self.dag, run_id=self.run_id)
@@ -210,6 +237,8 @@ class LocalExecutor:
                 if len(set(active) | existing_running) >= max_active:
                     break
                 ready = context.Event()
+                # 仅在子进程退出后读取控制结果，任务退出码仍用于任务自身。
+                outcome = context.Value("b", 0, lock=False)
                 process = context.Process(
                     target=run_local_task_worker,
                     args=(
@@ -223,6 +252,7 @@ class LocalExecutor:
                         self.task_lease_seconds,
                         self.scheduler_fence,
                         ready,
+                        outcome,
                     ),
                 )
                 try:
@@ -233,9 +263,9 @@ class LocalExecutor:
                     )
                     progressed = True
                     continue
-                active[task.task_id] = process
-                ready_events[task.task_id] = ready
-                started_at[task.task_id] = time.monotonic()
+                active[task.task_id] = _Worker(
+                    process, ready, outcome, time.monotonic()
+                )
                 progressed = True
 
             if not progressed:
@@ -277,8 +307,9 @@ def run_local_task_worker(
     conf: dict[str, Any],
     log_root: str,
     task_lease_seconds: int,
-    scheduler_fence: SchedulerFence | None = None,
-    ready: Any | None = None,
+    scheduler_fence: SchedulerFence | None,
+    ready: Any,
+    outcome: Any,
 ) -> None:
     store = SQLiteStateStore(database_url)
     record = store.get_dag_run(dag_id, run_id)
@@ -302,8 +333,7 @@ def run_local_task_worker(
         )
         return
     task = dag.get_task(task_id)
-    if ready is not None:
-        ready.set()
+    ready.set()
     runner = PersistentDagRunner(
         store,
         log_root=log_root,
@@ -324,6 +354,6 @@ def run_local_task_worker(
             single_attempt=True,
         )
     except SchedulerLeaseLost:
-        raise SystemExit(75)
+        outcome.value = _WorkerOutcome.LEASE_LOST
     except DagPaused:
-        raise SystemExit(77)
+        outcome.value = _WorkerOutcome.DAG_PAUSED

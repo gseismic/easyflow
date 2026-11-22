@@ -17,6 +17,11 @@ async original => {
   let delayPreview = false;
   let finishPreview;
   let previewArrived;
+  let delayClear = false;
+  let finishClear;
+  let clearArrived;
+  let backfillStatus = 200;
+  let backfillEligible = true;
   let role = 'admin';
   const ids = ['.', '..', 'detail', 'daily_sync'];
   const runId = 'custom/run +%?#中文';
@@ -56,12 +61,20 @@ async original => {
       return reply(route, { paused: body.paused });
     }
     if (path === '/api/workflows/trigger' && definition) return new Promise(resolve => {
-      pendingTriggers.push(async (status = 200) => {
-        await reply(route, status === 200 ? { run_id: 'created-run', paused: definition.paused, scheduler_running: false } : { detail: '触发测试错误' }, status);
+      pendingTriggers.push(async (status = 200, createdId = 'created-run') => {
+        if (status === 200 && createdId !== 'created-run') {
+          definition.runs.unshift({ ...definition.runs[0], run_id: createdId, state: 'queued' });
+        }
+        await reply(route, status === 200 ? { run_id: createdId, paused: definition.paused, scheduler_running: false } : { detail: '触发测试错误' }, status);
         resolve();
       });
     });
-    if (path === '/api/workflows/backfill-preview' && definition) return reply(route, [{ logical_date: '2026-07-01T00:00:00Z', eligible: true }]);
+    if (path === '/api/workflows/backfill-preview' && definition) {
+      const data = backfillStatus === 200
+        ? [{ logical_date: '2026-07-01T00:00:00Z', eligible: backfillEligible }]
+        : { detail: '回补预览测试错误' };
+      return reply(route, data, backfillStatus);
+    }
     if (path === '/api/history/run') return reply(route, {
       dag_id: dagId, run_id: get('run_id'), state: 'success', tasks: { example: 'success' },
       task_details: { example: { state: 'success', try_number: 1 } }, definition_matches: true,
@@ -73,7 +86,10 @@ async original => {
       if (delayPreview) await new Promise(resolve => { finishPreview = resolve; previewArrived(); });
       return reply(route, previewStatus === 200 ? previewResponse : { detail: '预览测试错误' }, previewStatus);
     }
-    if (path === '/api/runs/clear') return reply(route, clearStatus === 200 ? { to_clear: body.task_ids } : { detail: '任务状态已变化或仍在运行，请重新预览。' }, clearStatus);
+    if (path === '/api/runs/clear') {
+      if (delayClear) await new Promise(resolve => { finishClear = resolve; clearArrived(); });
+      return reply(route, clearStatus === 200 ? { to_clear: body.task_ids } : { detail: '任务状态已变化或仍在运行，请重新预览。' }, clearStatus);
+    }
     unexpected.push(`${request.method()} ${address}`);
     return reply(route, { detail: `未预期接口：${path}` }, 404);
   });
@@ -175,6 +191,21 @@ async original => {
     result.expiredTriggerCallbacks = ['关闭窗口', 'Esc', '关闭按钮', '卸载', '重开', '有效失败'];
 
     await go('daily_sync', 'logs');
+    await main.getByRole('heading', { name: '任务日志', exact: true }).waitFor();
+    await tab('概览').click();
+    await openTrigger();
+    const finishAfterBack = await submitTrigger();
+    await page.goBack();
+    await page.waitForURL('**/#/dags/daily_sync?tab=logs');
+    await trigger.waitFor({ state: 'hidden' });
+    await finishAfterBack(200, 'run-after-tab-navigation');
+    await main.locator('select[aria-label="选择运行"] option[value="run-after-tab-navigation"]')
+      .waitFor({ state: 'attached' });
+    check(page.url().endsWith('?tab=logs'), '迟到的触发回调覆盖日志标签导航');
+    await main.getByRole('heading', { name: '任务日志', exact: true }).waitFor();
+    result.triggerAfterTabNavigation = '日志标签保留，新运行出现在运行记录';
+
+    await go('daily_sync', 'logs');
     await main.getByRole('button', { name: '预览重跑', exact: true }).click();
     previewResponse = { to_clear: [], blocked: [{ task_id: 'example', reason: '任务仍在运行' }] };
     await inspect();
@@ -214,6 +245,50 @@ async original => {
     check(JSON.stringify(clearCalls.map(call => call.body.task_ids)) === JSON.stringify([['example'], ['example', 'historical-task']]), '确认未使用新预览任务范围');
     result.previewRecovery = ['blocked 刷新', '409 失效', '刷新失败失效', '范围锁定', '新快照确认'];
 
+    for (const kind of ['取消', 'Escape']) {
+      await main.getByRole('button', { name: '预览重跑', exact: true }).click();
+      previewResponse = { to_clear: ['example'], blocked: [] };
+      await inspect();
+      await confirm().waitFor();
+      delayClear = true;
+      const accepted = new Promise(resolve => { clearArrived = resolve; });
+      await confirm().click();
+      await accepted;
+      if (kind === '取消') await clearDialog.getByRole('button', { name: '取消', exact: true }).click();
+      else await page.keyboard.press('Escape');
+      await clearDialog.waitFor({ state: 'hidden' });
+      await openTrigger();
+      const draft = JSON.stringify({ close: kind });
+      await trigger.getByRole('textbox').fill(draft);
+      finishClear();
+      const notice = main.locator('.notice.success').filter({ hasText: '已清理 1 个任务，等待调度器执行。' });
+      await notice.waitFor();
+      check(await trigger.getByRole('textbox').inputValue() === draft, '旧清理回调关闭或覆盖了新触发弹窗');
+      await trigger.getByRole('button', { name: '取消', exact: true }).click();
+      await notice.getByRole('button', { name: '关闭', exact: true }).click();
+      delayClear = false;
+    }
+    result.clearAfterDialogClose = ['取消', 'Escape'];
+
+    await main.getByRole('button', { name: '回补预览', exact: true }).click();
+    const backfill = page.getByRole('dialog', { name: '回补日期预览', exact: true });
+    await backfill.getByLabel('开始日期', { exact: true }).fill('2026-07-01');
+    await backfill.getByLabel('结束日期', { exact: true }).fill('2026-07-01');
+    const submitBackfill = backfill.getByRole('button', { name: '预览日期', exact: true });
+    await submitBackfill.click();
+    await backfill.getByText('共 1 个区间，当前可创建 1 个', { exact: true }).waitFor();
+    backfillStatus = 503;
+    await submitBackfill.click();
+    await backfill.getByRole('alert').getByText('回补预览测试错误', { exact: true }).waitFor();
+    check(await backfill.locator('.preview-box').count() === 0, '回补重新预览失败仍展示旧数量');
+    backfillStatus = 200;
+    backfillEligible = false;
+    await submitBackfill.click();
+    await backfill.getByText('共 1 个区间，当前可创建 0 个', { exact: true }).waitFor();
+    await page.keyboard.press('Escape');
+    await backfill.waitFor({ state: 'hidden' });
+    result.backfillPreviewRetry = ['成功', '失败清空', '重试展示新数量'];
+
     for (const width of [320, 390, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       await page.waitForFunction(() => document.querySelector('#workspace-navigation').open === (innerWidth > 1000));
@@ -247,6 +322,7 @@ async original => {
     throw new Error(`已完成 ${JSON.stringify(result)}；${error.message}；未预期接口 ${unexpected.join('; ')}`);
   } finally {
     finishPreview?.();
+    finishClear?.();
     await context.close();
   }
 }

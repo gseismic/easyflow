@@ -62,7 +62,6 @@ def clear_tasks(dag_id: str, run_id: str, body: ClearRequest, request: Request):
         actor=f"web:{request.state.user.username}",
     )
     if result.blocked:
-        raise HTTPException(
-            status_code=409, detail="任务状态已变化或仍在运行，请重新预览。"
-        )
+        reasons = " ".join(f"{item.task_id}：{item.reason}" for item in result.blocked)
+        raise HTTPException(status_code=409, detail=f"请重新预览。{reasons}")
     return {"to_clear": result.to_clear}

@@ -1,26 +1,19 @@
 from __future__ import annotations
 
 import copy
-import errno
 import hashlib
 import io
 import json
 import os
 import time
 import traceback
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from collections.abc import Callable
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
-
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - Windows
-    fcntl = None
-    import msvcrt
 
 from easyflow._internal.dag_parser import definition_hash_for_dag
 from easyflow._internal.schedules import DataInterval
@@ -225,65 +218,45 @@ class PersistentDagRunner:
         executor: str = "sequential",
         parallelism: int = 1,
         wait_for_retry: bool = True,
+        wait_for_completion: bool = False,
     ) -> PersistentRunResult:
+        """同步入口可等待同一次运行，扫描入口遇到锁争用时直接返回当前状态。"""
         validate_executor(executor)
         self.store.configure_parallelism(parallelism)
-        with self._run_lock(dag.dag_id, run_id) as acquired:
-            if not acquired:
+        while True:
+            result = None
+            with self.store.run_lock(dag.dag_id, run_id) as acquired:
+                if acquired:
+                    result = self._run_existing_locked(
+                        dag,
+                        run_id=run_id,
+                        file_path=file_path,
+                        executor=executor,
+                        parallelism=parallelism,
+                        wait_for_retry=wait_for_retry,
+                    )
+            if result is None:
                 record = self.store.get_dag_run(dag.dag_id, run_id)
                 if record is None:
                     raise ValueError(f"DagRun 不存在: {dag.dag_id}/{run_id}")
+                state = DagRunState(record.state)
+            else:
+                state = result.state
+            if (
+                not wait_for_completion
+                or state in {DagRunState.SUCCESS, DagRunState.FAILED}
+                or not self.should_continue()
+                or self.store.is_dag_paused(dag.dag_id)
+            ):
+                if result is not None:
+                    return result
                 return PersistentRunResult(
                     dag.dag_id,
                     run_id,
-                    DagRunState(record.state),
+                    state,
                     self.store.list_task_states(dag.dag_id, run_id),
                 )
-            return self._run_existing_locked(
-                dag,
-                run_id=run_id,
-                file_path=file_path,
-                executor=executor,
-                parallelism=parallelism,
-                wait_for_retry=wait_for_retry,
-            )
-
-    @contextmanager
-    def _run_lock(self, dag_id: str, run_id: str) -> Iterator[bool]:
-        lock_root = self.store.path.resolve().parent / ".easyflow-run-locks"
-        lock_root.mkdir(parents=True, exist_ok=True)
-        digest = hashlib.sha256(
-            f"{self.store.path.resolve()}\0{dag_id}\0{run_id}".encode()
-        ).hexdigest()
-        with (lock_root / digest).open("a+b") as handle:
-            if fcntl is None:  # pragma: no cover - Windows
-                handle.seek(0, os.SEEK_END)
-                if handle.tell() == 0:
-                    handle.write(b"\0")
-                    handle.flush()
-                handle.seek(0)
-            try:
-                if fcntl is None:  # pragma: no cover - Windows
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError as exc:
-                if exc.errno not in {
-                    errno.EACCES,
-                    errno.EAGAIN,
-                    errno.EDEADLK,
-                } and getattr(exc, "winerror", None) not in {33, 36}:
-                    raise
-                yield False
-                return
-            try:
-                yield True
-            finally:
-                if fcntl is None:  # pragma: no cover - Windows
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            time.sleep(0.05)
 
     def _run_existing_locked(
         self,
@@ -629,7 +602,7 @@ class PersistentDagRunner:
                     state=TaskInstanceState.SKIPPED,
                 )
                 return
-            except Exception as exc:
+            except (Exception, SystemExit) as exc:
                 try:
                     log_path.parent.mkdir(parents=True, exist_ok=True)
                     with log_path.open("a", encoding="utf-8") as log_file:

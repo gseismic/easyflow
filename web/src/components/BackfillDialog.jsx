@@ -22,6 +22,7 @@ export default function BackfillDialog({ dagId, onClose }) {
     event.preventDefault();
     setBusy(true);
     setError("");
+    setPreview(null);
     try {
       const payload = precise
         ? {

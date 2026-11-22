@@ -490,7 +490,7 @@ def test_upgrade_recovers_retry_baseline_from_clear_audit(tmp_path):
 def test_windows_run_lock_branch_handles_contention_and_release(tmp_path, monkeypatch):
     import errno
 
-    import easyflow._internal.persistent_runner as runner_module
+    import easyflow._internal.state_store as state_store_module
 
     class FakeWindowsLock:
         LK_NBLCK = 1
@@ -507,14 +507,13 @@ def test_windows_run_lock_branch_handles_contention_and_release(tmp_path, monkey
                 self.held = False
 
     fake = FakeWindowsLock()
-    monkeypatch.setattr(runner_module, "fcntl", None)
-    monkeypatch.setattr(runner_module, "msvcrt", fake, raising=False)
+    monkeypatch.setattr(state_store_module, "fcntl", None)
+    monkeypatch.setattr(state_store_module, "msvcrt", fake, raising=False)
     store = SQLiteStateStore(f"sqlite:///{tmp_path / 'db.sqlite'}")
-    runner = PersistentDagRunner(store)
-    with runner._run_lock("d", "r") as acquired:
+    with store.run_lock("d", "r") as acquired:
         assert acquired
-        with runner._run_lock("d", "r") as concurrent:
+        with store.run_lock("d", "r") as concurrent:
             assert not concurrent
     assert not fake.held
-    with runner._run_lock("d", "r") as acquired:
+    with store.run_lock("d", "r") as acquired:
         assert acquired

@@ -339,13 +339,15 @@ def _render_value(value: Any, env: Environment, context: dict[str, Any]) -> Any:
 
 
 def _push_result(task: Any, result: Any, xcom_store: InMemoryXComStore) -> None:
-    xcom_store.push(task.task_id, RETURN_VALUE_KEY, result)
     if task.multiple_outputs:
         if not isinstance(result, Mapping):
             raise XComSerializationError(
                 "multiple_outputs=True requires the task return value to be a mapping."
             )
+        if any(not isinstance(key, str) for key in result):
+            raise XComSerializationError("multiple_outputs keys must be strings.")
+    xcom_store.push(task.task_id, RETURN_VALUE_KEY, result)
+    if task.multiple_outputs:
         for key, value in result.items():
-            if not isinstance(key, str):
-                raise XComSerializationError("multiple_outputs keys must be strings.")
-            xcom_store.push(task.task_id, key, value)
+            if key != RETURN_VALUE_KEY:
+                xcom_store.push(task.task_id, key, value)

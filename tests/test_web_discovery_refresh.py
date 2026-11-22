@@ -13,7 +13,9 @@ from easyflow._internal.dag_parser import (
     DagDiscoveryResult,
     DagParseIssue,
     DagSource,
+    load_dag_from_file,
 )
+from easyflow._internal.persistent_runner import PersistentDagRunner
 from easyflow.sdk import DAG
 from easyflow.web.app import create_app
 
@@ -224,3 +226,83 @@ def test_web_loading_and_facets_follow_snapshot_availability(
         assert_status(client, pending=False, complete=False)
         parser_control.jobs[path].set_result(parsed(path))
         assert_status(client, pending=False, complete=True)
+
+
+def test_detail_and_definition_match_retry_while_target_is_parsing(
+    tmp_path,
+    parser_control,
+    monkeypatch,
+):
+    from datetime import UTC, datetime
+
+    from easyflow.web import service
+
+    monkeypatch.setattr(service, "_SOURCE_DISCOVERY_WAIT_SECONDS", 0)
+    folder = tmp_path / "dags"
+    folder.mkdir()
+    fast = folder / "fast.py"
+    fast.touch()
+    target = folder / "slow.py"
+    target.write_text(
+        'from easyflow.sdk import DAG\ndag = DAG("slow")\n', encoding="utf-8"
+    )
+    dag = load_dag_from_file(target, "slow")
+    app = create_app(
+        dags_folder=str(folder),
+        database_url=str(tmp_path / "state.db"),
+        log_root=str(tmp_path / "logs"),
+    )
+    web_service = app.state.service
+    run_id = PersistentDagRunner(web_service.store).create_manual_run(
+        dag,
+        file_path=target,
+        logical_date=datetime.now(UTC),
+        run_id="old",
+    )
+    web_service.discovery.scan()
+    parser_control.jobs[fast].set_result(parsed(fast, "fast"))
+    app.state.auth.create_user("reader", "readonly-password", "viewer")
+    with TestClient(app, base_url="http://127.0.0.1:8790") as client:
+        assert (
+            client.post(
+                "/api/auth/login",
+                json={"username": "reader", "password": "readonly-password"},
+            ).status_code
+            == 200
+        )
+        assert client.get("/api/dags/fast").status_code == 200
+        detail = "/api/dags/slow"
+        run_detail = f"{detail}/runs/{run_id}"
+        for endpoint in [detail, "/api/dags/missing"]:
+            response = client.get(endpoint)
+            assert response.status_code == 503
+            assert (
+                response.headers["Retry-After"] == "1"
+                and "正在解析" in response.json()["detail"]
+            )
+        pending_run = client.get(run_detail)
+        assert (
+            pending_run.status_code == 200 and pending_run.json()["state"] == "queued"
+        )
+        assert pending_run.json()["definition_pending"] is True
+        parser_control.jobs[target].set_result(
+            DagDiscoveryResult([DagSource("slow", target, dag)], [])
+        )
+        assert client.get(detail).status_code == 200
+        assert client.get(run_detail).json()["definition_matches"] is True
+        assert client.get("/api/dags/missing").status_code == 404
+
+
+def test_duplicate_cached_target_still_waits_for_incomplete_scan(
+    tmp_path, parser_control
+):
+    first, second, pending = [tmp_path / f"{name}.py" for name in ("a", "b", "c")]
+    for path in (first, second, pending):
+        path.touch()
+    discovery = AsyncDagDiscovery(tmp_path)
+    discovery.scan()
+    for path in (first, second):
+        parser_control.jobs[path].set_result(parsed(path))
+    result = discovery.scan(dag_id="demo", wait_seconds=0.5)
+    assert result.pending and not result.sources
+    parser_control.wait.assert_called_once()

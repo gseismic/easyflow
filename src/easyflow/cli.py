@@ -8,7 +8,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated
 
-import click
 import typer
 
 from easyflow._internal.dag_parser import (
@@ -89,7 +88,7 @@ def _auth_store(database_url: str):
     from easyflow.web.auth import AuthStore
 
     store = SQLiteStateStore(database_url)
-    store.init_db()
+    store.init_db(repair=False)
     return AuthStore(store.path)
 
 
@@ -230,6 +229,7 @@ def dags_trigger(
             file_path=source.file_path,
             executor=executor,
             parallelism=chosen_parallelism,
+            wait_for_completion=True,
         )
     except (ValueError, DagRunCapacityError) as exc:
         _error(str(exc))
@@ -484,9 +484,16 @@ def backfill_create(
         typer.echo(f"{dag_id} {run.run_id} {run.state.value}")
     if not summary.complete:
         typer.echo(
-            f"backfill 未完成，待处理区间数: {len(summary.pending)}；已有运行可由 scheduler 继续。",
+            f"backfill 未完成，已创建但未完成 {len(summary.pending)} 个区间。"
+            "已有运行可由 scheduler 继续。",
             err=True,
         )
+        if summary.pending_range is not None:
+            first, last = summary.pending_range
+            typer.echo(
+                f"尚未检查的逻辑日期为 {first.isoformat()} 至 {last.isoformat()}。",
+                err=True,
+            )
     if not summary.complete or any(
         run.state.value != "success" for run in summary.runs
     ):
@@ -521,13 +528,12 @@ def web(
 
 def main(argv: list[str] | None = None) -> int:
     try:
-        result = app(args=argv, prog_name="easyflow", standalone_mode=False)
-        return result if isinstance(result, int) else 0
-    except (click.ClickException, typer.BadParameter) as exc:
-        exc.show()
-        return exc.exit_code
-    except (click.exceptions.Exit, typer.Exit) as exc:
-        return exc.exit_code
+        app(args=argv, prog_name="easyflow")
+    except SystemExit as exc:
+        if isinstance(exc.code, int):
+            return exc.code
+        raise
+    return 0
 
 
 def _parse_logical_date(value: str | None) -> datetime:

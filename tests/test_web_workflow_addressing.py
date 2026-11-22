@@ -105,6 +105,15 @@ def test_workflow_query_routes_preserve_ids_and_legacy_routes(workflow_client):
     assert preview.status_code == 200
     assert len(preview.json()) == 2 and all(item["eligible"] for item in preview.json())
     assert service.store.count_dag_runs(dag_id=dag_id, run_type="backfill") == 0
+    clear_params = {**params, "run_id": run_id}
+    clear_body = {"task_ids": ["example", "missing/task"]}
+    clear_preview = client.post(
+        "/api/runs/clear-preview", params=clear_params, json=clear_body
+    )
+    assert clear_preview.status_code == 200
+    assert clear_preview.json()["blocked"][0]["task_id"] == "missing/task"
+    clear = client.post("/api/runs/clear", params=clear_params, json=clear_body)
+    assert clear.status_code == 409 and "missing/task" in clear.json()["detail"]
     assert client.get("/api/workflows/detail", params=params).json()["paused"]
     assert client.get("/api/workflows/detail").status_code == 422
     assert client.get("/api/workflows/detail", params={"dag_id": "missing"}).status_code == 404

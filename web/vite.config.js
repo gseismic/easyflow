@@ -10,6 +10,6 @@ export default defineConfig({
         `(()=>{const appearance=(${createAppearanceApi.toString()})();let storage=null;try{storage=window.localStorage;}catch{}appearance.apply(document,appearance.read(storage),new Date());})();` }];
     },
   }],
-  build: { outDir: "../src/easyflow/web/static", emptyOutDir: true },
+  build: { outDir: "../src/easyflow/web/static", emptyOutDir: false },
   server: { proxy: { "/api": "http://127.0.0.1:8790" } },
 });

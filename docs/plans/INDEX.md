@@ -71,3 +71,5 @@
 - 2026-11-17 04:13 Asia/Shanghai：[侧栏协调性修复结果](PLAN-20261117-002-model-unknown-sidebar-alignment-OUTCOME.md)，已完成（WORKTREE）；37 项前端、8 项 Web 测试、构建和导航回归通过，参考图场景、长名称、多子项、黑夜、320px/390px 抽屉及异常状态检查通过；版本 `0.1.1 → 0.1.2`，刷新现有页面即可应用，未提交或推送。
 - 2026-11-17 09:40 Asia/Shanghai：[前端 Review 修复与循环复审计划](PLAN-20261117-003-model-unknown-frontend-review-loop.md)，进行中；修复点号 DAG 寻址、过期触发回调和重跑预览恢复，重新覆盖全部前端。
 - 2026-11-17 10:03 Asia/Shanghai：[前端 Review 修复与循环复审结果](PLAN-20261117-003-model-unknown-frontend-review-loop-OUTCOME.md)，已完成（WORKTREE）；三项修复及窄屏弹窗回归通过，38 项前端、298 项后端、最终构建、定向与导航浏览器回归及真实隔离 Web 验收通过；版本 `0.1.2 → 0.1.3`，最后一轮无待修复逻辑问题，未提交或推送，业务 Web 需重启加载新 API。
+- 2026-11-22 16:13 Asia/Shanghai：[全量代码 Review 修复计划](PLAN-20261122-001-model-unknown-all-code-review-fixes.md)，进行中，覆盖 R01–R21。
+- 2026-11-22 16:49 Asia/Shanghai：[全量代码 Review 修复结果](PLAN-20261122-001-model-unknown-all-code-review-fixes-OUTCOME.md)，已完成（WORKTREE），21 项均已复验。319 项后端、38 项前端、浏览器、构建资源保留与分发包检查通过。

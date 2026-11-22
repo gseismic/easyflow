@@ -143,7 +143,7 @@ with DAG("active_limit", schedule="@daily", max_active_runs=1) as dag:
         run_id="manual__still_queued",
     )
 
-    with runner._run_lock("active_limit", "manual__still_queued"):
+    with store.run_lock("active_limit", "manual__still_queued"):
         created = run_scheduler_once(
             dag_id="active_limit",
             file_path=dag_file,

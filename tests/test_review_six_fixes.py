@@ -383,7 +383,7 @@ def test_backfill_creation_enumerates_only_intersecting_range(tmp_path, monkeypa
         end_date=date(2026, 7, 2),
         log_root=tmp_path / "logs",
     )
-    assert result.complete and len(result.runs) == 3 and calls == 3
+    assert result.complete and len(result.runs) == 3 and calls == 2
 
 
 def test_clipping_preserves_delta_anchor_and_dst_instant(tmp_path):

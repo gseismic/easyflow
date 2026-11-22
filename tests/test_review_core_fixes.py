@@ -199,15 +199,15 @@ def test_backfill_preview_is_bounded_and_reads_states_once(
         logical_date=datetime(2026, 7, 1, 1, tzinfo=UTC),
         run_id="existing",
     )
-    original_init_db = store.init_db
-    init_calls = 0
+    original_connect = store._connect
+    connections = 0
 
-    def counted_init_db():
-        nonlocal init_calls
-        init_calls += 1
-        return original_init_db()
+    def counted_connect():
+        nonlocal connections
+        connections += 1
+        return original_connect()
 
-    monkeypatch.setattr(store, "init_db", counted_init_db)
+    monkeypatch.setattr(store, "_connect", counted_connect)
     preview = preview_backfill(
         dag=hourly,
         store=store,
@@ -215,7 +215,7 @@ def test_backfill_preview_is_bounded_and_reads_states_once(
         end_date=date(2026, 7, 1),
     )
     assert len(preview) == 24
-    assert init_calls == 1
+    assert connections == 1
     assert preview[1].latest_state.value == "queued"
     assert not preview[1].eligible and preview[2].eligible
 
@@ -227,7 +227,7 @@ def test_backfill_preview_is_bounded_and_reads_states_once(
             start_date=date(2026, 7, 1),
             end_date=date(2026, 7, 1),
         )
-    assert init_calls == 1
+    assert connections == 1
     path = tmp_path / "minute.py"
     path.write_text(
         'from easyflow.sdk import DAG\ndag = DAG("minute", schedule="* * * * *")\n',

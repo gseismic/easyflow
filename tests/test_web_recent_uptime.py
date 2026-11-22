@@ -4,7 +4,11 @@ from itertools import pairwise
 
 import pytest
 
+from easyflow._internal.persistent_runner import PersistentDagRunner
 from easyflow._internal.state_store import SQLiteStateStore
+from easyflow.providers.standard.operators.empty import EmptyOperator
+from easyflow.sdk import DAG
+from easyflow.sdk.states import DagRunState
 from easyflow.web.uptime import workflow_uptime
 
 
@@ -108,6 +112,55 @@ def test_recent_window_is_elapsed_hours_even_across_dst(tmp_path, hours, instant
 def test_recent_hours_reject_invalid_values(tmp_path, hours):
     with pytest.raises(ValueError, match="1 到 168"):
         workflow_uptime(tmp_path / "unused.db", dag_ids=["demo"], lookback_hours=hours)
+
+
+@pytest.mark.parametrize("started_at_now", [False, True])
+def test_recent_window_shows_running_with_waiting_tasks(tmp_path, started_at_now):
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    now = datetime(2026, 11, 15, 16, 47, tzinfo=UTC)
+    boundary = now.replace(minute=30)
+    with DAG("demo") as dag:
+        EmptyOperator(task_id="work") >> EmptyOperator(task_id="downstream")
+    run_id = PersistentDagRunner(store).create_manual_run(
+        dag,
+        file_path=None,
+        logical_date=now,
+    )
+    store.set_dag_run_state(dag.dag_id, run_id, DagRunState.RUNNING)
+    assert (
+        store.start_task_try(
+            dag.dag_id,
+            run_id,
+            "work",
+            now=now if started_at_now else now - timedelta(minutes=5),
+        )
+        == 1
+    )
+    # 失败在独立的历史半小时边界，该边界只属于后一格。
+    earlier_boundary = boundary - timedelta(minutes=30)
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("UPDATE dag_run SET queued_at = ?", (boundary.isoformat(),))
+        connection.execute(
+            "INSERT INTO dag_run (dag_id,run_id,run_type,state,logical_date,data_interval_start,"
+            "data_interval_end,queued_at,end_date) VALUES ('demo','edge','manual','failed',?,?,?,?,?)",
+            (earlier_boundary.isoformat(),) * 5,
+        )
+
+    recent = workflow_uptime(store.path, dag_ids=["demo"], lookback_hours=1, now=now)
+    fixed = workflow_uptime(
+        store.path,
+        dag_ids=["demo"],
+        start_at=earlier_boundary - timedelta(minutes=30),
+        end_at=boundary + timedelta(minutes=30),
+        now=now,
+    )
+    for response in (recent, fixed):
+        slots = response["workflows"]["demo"]
+        assert slots[-1]["state"] == "running"
+        assert slots[-1]["run_count"] == slots[-1]["waiting_run_count"] == 1
+        assert [slot["start_at"] for slot in slots if slot["failed_run_count"]] == [
+            earlier_boundary.isoformat()
+        ]
 
 
 def test_recent_hours_cannot_mix_with_absolute_or_daily_ranges(tmp_path):

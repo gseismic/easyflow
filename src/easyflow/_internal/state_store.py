@@ -1,15 +1,25 @@
 from __future__ import annotations
 
+import errno
+import hashlib
 import json
 import os
 import sqlite3
 import time
 import traceback
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
+    import msvcrt
 
 from easyflow.sdk.exceptions import (
     StateConflictError,
@@ -19,6 +29,7 @@ from easyflow.sdk.exceptions import (
 from easyflow.sdk.states import DagRunState, TaskInstanceState
 
 MAX_XCOM_BYTES = 1_048_576
+_SCHEMA_VERSION = 1
 
 
 class DagRunCapacityError(StateConflictError):
@@ -53,9 +64,6 @@ class SchedulerFence:
 
 
 SCHEMA = """
-PRAGMA journal_mode=WAL;
-PRAGMA foreign_keys=ON;
-
 CREATE TABLE IF NOT EXISTS dag_definition (
     dag_id TEXT PRIMARY KEY,
     definition_hash TEXT NOT NULL,
@@ -236,42 +244,48 @@ class SQLiteStateStore:
         self.path = path_from_database_url(database_url).resolve()
         self.database_url = f"sqlite:///{self.path}"
 
-    def init_db(self) -> Path:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.path) as connection:
-            connection.executescript(SCHEMA)
-            connection.execute("BEGIN IMMEDIATE")
-            columns = {
-                row[1] for row in connection.execute("PRAGMA table_info(dag_run)")
-            }
-            if "logical_timezone" not in columns:
-                connection.execute(
-                    "ALTER TABLE dag_run ADD COLUMN logical_timezone TEXT"
-                )
-            if "backfill_max_active_runs" not in columns:
-                connection.execute(
-                    "ALTER TABLE dag_run ADD COLUMN backfill_max_active_runs INTEGER"
-                )
-            columns = {
-                row[1]
-                for row in connection.execute("PRAGMA table_info(dag_definition)")
-            }
-            if "max_active_runs" not in columns:
-                connection.execute(
-                    "ALTER TABLE dag_definition ADD COLUMN max_active_runs INTEGER NOT NULL DEFAULT 1"
-                )
-            columns = {
-                row[1] for row in connection.execute("PRAGMA table_info(task_instance)")
-            }
-            if "retry_base" not in columns:
-                connection.execute(
-                    "ALTER TABLE task_instance ADD COLUMN retry_base INTEGER NOT NULL DEFAULT 0"
-                )
-                _restore_retry_baselines(connection)
+    def init_db(self, *, repair: bool = True) -> Path:
+        with self._connect(repair=repair):
+            pass
         return self.path
 
+    @contextmanager
+    def run_lock(self, dag_id: str, run_id: str) -> Iterator[bool]:
+        lock_root = self.path.parent / ".easyflow-run-locks"
+        lock_root.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(f"{self.path}\0{dag_id}\0{run_id}".encode()).hexdigest()
+        with (lock_root / digest).open("a+b") as handle:
+            if fcntl is None:  # pragma: no cover - Windows
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b"\0")
+                    handle.flush()
+                handle.seek(0)
+            try:
+                if fcntl is None:  # pragma: no cover - Windows
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                if exc.errno not in {
+                    errno.EACCES,
+                    errno.EAGAIN,
+                    errno.EDEADLK,
+                } and getattr(exc, "winerror", None) not in {33, 36}:
+                    raise
+                yield False
+                return
+            try:
+                yield True
+            finally:
+                if fcntl is None:  # pragma: no cover - Windows
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
     def list_tables(self) -> list[str]:
-        with sqlite3.connect(self.path) as connection:
+        with self._connect() as connection:
             rows = connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
             ).fetchall()
@@ -280,7 +294,6 @@ class SQLiteStateStore:
     def configure_parallelism(self, value: int, *, override: bool = False) -> int:
         if value < 1:
             raise ValueError("parallelism 必须大于 0。")
-        self.init_db()
         with self._connect() as connection:
             if override:
                 connection.execute(
@@ -299,7 +312,6 @@ class SQLiteStateStore:
         return int(row[0])
 
     def set_dag_paused(self, dag_id: str, paused: bool) -> None:
-        self.init_db()
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO dag_control(dag_id, is_paused) VALUES (?, ?) "
@@ -308,7 +320,6 @@ class SQLiteStateStore:
             )
 
     def is_dag_paused(self, dag_id: str) -> bool:
-        self.init_db()
         with self._connect() as connection:
             return _is_dag_paused(connection, dag_id)
 
@@ -331,7 +342,6 @@ class SQLiteStateStore:
         reprocessing_behavior: str | None = None,
     ) -> None:
         now = _utc_now()
-        self.init_db()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             _assert_scheduler_lease(connection, scheduler_fence)
@@ -452,7 +462,6 @@ class SQLiteStateStore:
         max_active_runs: int | None,
     ) -> None:
         now = _utc_now()
-        self.init_db()
         with self._connect() as connection:
             connection.execute(
                 """
@@ -480,7 +489,6 @@ class SQLiteStateStore:
         logical_date: datetime,
         run_type: str | None = None,
     ) -> bool:
-        self.init_db()
         query = "SELECT 1 FROM dag_run WHERE dag_id = ? AND logical_date = ?"
         params: list[Any] = [dag_id, _iso(logical_date)]
         if run_type is not None:
@@ -492,7 +500,6 @@ class SQLiteStateStore:
         return row is not None
 
     def latest_automated_logical_date(self, dag_id: str) -> datetime | None:
-        self.init_db()
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT MAX(logical_date) FROM ("
@@ -503,9 +510,16 @@ class SQLiteStateStore:
             ).fetchone()
         return None if row is None or row[0] is None else datetime.fromisoformat(row[0])
 
-    def advance_schedule_cursor(self, dag_id: str, logical_date: datetime) -> None:
-        self.init_db()
+    def advance_schedule_cursor(
+        self,
+        dag_id: str,
+        logical_date: datetime,
+        *,
+        scheduler_fence: SchedulerFence | None = None,
+    ) -> None:
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            _assert_scheduler_lease(connection, scheduler_fence)
             connection.execute(
                 "INSERT INTO schedule_cursor(dag_id, logical_date) VALUES (?, ?) "
                 "ON CONFLICT(dag_id) DO UPDATE SET "
@@ -516,7 +530,6 @@ class SQLiteStateStore:
     def backfilled_logical_dates(
         self, dag_id: str, start: datetime, end: datetime
     ) -> set[str]:
-        self.init_db()
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT DISTINCT logical_date FROM dag_run WHERE dag_id = ? "
@@ -528,7 +541,6 @@ class SQLiteStateStore:
     def latest_dag_run_states_for_range(
         self, *, dag_id: str, start: datetime, end: datetime
     ) -> dict[str, DagRunState]:
-        self.init_db()
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT logical_date, state FROM dag_run WHERE dag_id = ? "
@@ -547,7 +559,6 @@ class SQLiteStateStore:
         dag_id: str,
         logical_date: datetime,
     ) -> DagRunState | None:
-        self.init_db()
         with self._connect() as connection:
             row = connection.execute(
                 """
@@ -569,7 +580,6 @@ class SQLiteStateStore:
         task_id: str,
         logical_date: datetime,
     ) -> "PreviousTaskRecord":
-        self.init_db()
         with self._connect() as connection:
             row = connection.execute(
                 """
@@ -597,7 +607,6 @@ class SQLiteStateStore:
         )
 
     def count_dag_runs(self, *, dag_id: str, run_type: str | None = None) -> int:
-        self.init_db()
         query = "SELECT COUNT(*) FROM dag_run WHERE dag_id = ?"
         params: list[Any] = [dag_id]
         if run_type is not None:
@@ -608,7 +617,6 @@ class SQLiteStateStore:
         return int(row[0])
 
     def count_active_dag_runs(self, *, dag_id: str) -> int:
-        self.init_db()
         with self._connect() as connection:
             row = connection.execute(
                 """
@@ -621,7 +629,6 @@ class SQLiteStateStore:
         return int(row[0])
 
     def list_active_dag_runs(self, dag_id: str) -> list[str]:
-        self.init_db()
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT run_id FROM dag_run WHERE dag_id = ? AND state IN ('queued', 'running') "
@@ -631,7 +638,6 @@ class SQLiteStateStore:
         return [row[0] for row in rows]
 
     def get_dag_run(self, dag_id: str, run_id: str) -> "DagRunRecord | None":
-        self.init_db()
         with self._connect() as connection:
             row = connection.execute(
                 """
@@ -647,7 +653,6 @@ class SQLiteStateStore:
         return DagRunRecord(*row)
 
     def set_dag_run_state(self, dag_id: str, run_id: str, state: DagRunState) -> None:
-        self.init_db()
         now = _utc_now()
         start_date = now if state == DagRunState.RUNNING else None
         end_date = now if state in {DagRunState.SUCCESS, DagRunState.FAILED} else None
@@ -664,7 +669,6 @@ class SQLiteStateStore:
             )
 
     def finish_dag_run(self, dag: Any, run_id: str) -> DagRunState:
-        self.init_db()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -701,7 +705,6 @@ class SQLiteStateStore:
     def list_task_states(
         self, dag_id: str, run_id: str
     ) -> dict[str, TaskInstanceState | None]:
-        self.init_db()
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -723,7 +726,6 @@ class SQLiteStateStore:
         run_id: str,
         task_id: str,
     ) -> TaskInstanceState | None:
-        self.init_db()
         with self._connect() as connection:
             row = connection.execute(
                 """
@@ -746,7 +748,6 @@ class SQLiteStateStore:
         scheduler_fence: SchedulerFence | None = None,
     ) -> bool:
         """记录最近一次尝试进入执行队列的时间；重复扫描不覆盖排队起点。"""
-        self.init_db()
         if now is not None and now.tzinfo is None:
             raise ValueError("now 必须带时区。")
         with self._connect() as connection:
@@ -798,7 +799,6 @@ class SQLiteStateStore:
     ) -> int | None:
         if max_active_tasks is not None and max_active_tasks < 1:
             raise ValueError("max_active_tasks 必须大于 0。")
-        self.init_db()
         current = now or datetime.now(timezone.utc)
         if current.tzinfo is None:
             raise ValueError("now 必须带时区。")
@@ -940,7 +940,6 @@ class SQLiteStateStore:
         return next_try
 
     def task_retry_at(self, dag_id: str, run_id: str, task_id: str) -> datetime | None:
-        self.init_db()
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT next_retry_at FROM task_instance WHERE dag_id = ? AND run_id = ? AND task_id = ?",
@@ -960,7 +959,6 @@ class SQLiteStateStore:
         lease_seconds: int = 30,
         now: datetime | None = None,
     ) -> bool:
-        self.init_db()
         current = now or datetime.now(timezone.utc)
         if current.tzinfo is None:
             raise ValueError("now 必须带时区。")
@@ -981,6 +979,7 @@ class SQLiteStateStore:
                 WHERE dag_id = ? AND run_id = ? AND task_id = ? AND map_index = -1
                   AND state = ? AND try_number = ?
                   AND executor_id = ? AND worker_pid = ?
+                  AND (lease_expires_at IS NULL OR lease_expires_at > ?)
                 """,
                 (
                     lease_until,
@@ -992,6 +991,7 @@ class SQLiteStateStore:
                     try_number,
                     owner,
                     worker_pid,
+                    now_iso,
                 ),
             ).rowcount
             if updated != 1:
@@ -1018,7 +1018,6 @@ class SQLiteStateStore:
         try_number: int,
         log_path: str,
     ) -> None:
-        self.init_db()
         with self._connect() as connection:
             connection.execute(
                 """
@@ -1042,7 +1041,6 @@ class SQLiteStateStore:
     ) -> None:
         if state not in {TaskInstanceState.SUCCESS, TaskInstanceState.SKIPPED}:
             raise ValueError("任务终态提交只支持 success 或 skipped。")
-        self.init_db()
         now = _utc_now()
         encoded_xcom = {
             key: _json_dumps_xcom(value) for key, value in xcom_values.items()
@@ -1115,7 +1113,6 @@ class SQLiteStateStore:
         retry_factor: float = 1.0,
         max_retry_delay: timedelta | None = None,
     ) -> TaskInstanceState:
-        self.init_db()
         current = datetime.now(timezone.utc)
         now = _iso(current)
         with self._connect() as connection:
@@ -1197,8 +1194,8 @@ class SQLiteStateStore:
         retry_delay: timedelta = timedelta(0),
         retry_factor: float = 1.0,
         max_retry_delay: timedelta | None = None,
+        worker_exit: tuple[int, int] | None = None,
     ) -> TaskInstanceState | None:
-        self.init_db()
         current = now or datetime.now(timezone.utc)
         if current.tzinfo is None:
             raise ValueError("now 必须带时区。")
@@ -1207,7 +1204,7 @@ class SQLiteStateStore:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
-                SELECT state, try_number, lease_expires_at, retry_base
+                SELECT state, try_number, lease_expires_at, retry_base, worker_pid
                 FROM task_instance
                 WHERE dag_id = ? AND run_id = ? AND task_id = ? AND map_index = -1
                 """,
@@ -1217,13 +1214,21 @@ class SQLiteStateStore:
                 raise StateConflictError(
                     f"TaskInstance 不存在: {dag_id}/{run_id}/{task_id}"
                 )
-            state, try_number, lease_expires_at, retry_base = row
+            state, try_number, lease_expires_at, retry_base, worker_pid = row
             if state != TaskInstanceState.RUNNING.value:
                 return None
-            if lease_expires_at is None:
-                return None
-            if datetime.fromisoformat(lease_expires_at) > current:
-                return None
+            if worker_exit is not None:
+                exited_pid, exitcode = worker_exit
+                if worker_pid != exited_pid:
+                    return None
+                message = f"Worker 在提交任务结果前退出，exitcode={exitcode}。"
+            else:
+                if (
+                    lease_expires_at is None
+                    or datetime.fromisoformat(lease_expires_at) > current
+                ):
+                    return None
+                message = "Task lease expired before success/failure commit."
             next_state = (
                 TaskInstanceState.UP_FOR_RETRY
                 if int(try_number) - retry_base <= retries
@@ -1251,7 +1256,7 @@ class SQLiteStateStore:
                     executor_id = NULL,
                     worker_pid = NULL
                 WHERE dag_id = ? AND run_id = ? AND task_id = ? AND map_index = -1
-                  AND state = ? AND try_number = ? AND lease_expires_at = ?
+                  AND state = ? AND try_number = ? AND lease_expires_at IS ?
                 """,
                 (
                     next_state.value,
@@ -1278,7 +1283,7 @@ class SQLiteStateStore:
                     TaskInstanceState.FAILED.value,
                     now_iso,
                     "TASK_PROCESS_LOST",
-                    "Task lease expired before success/failure commit.",
+                    message,
                     dag_id,
                     run_id,
                     task_id,
@@ -1339,7 +1344,6 @@ class SQLiteStateStore:
         task_id: str,
         state: TaskInstanceState,
     ) -> None:
-        self.init_db()
         if state not in {
             TaskInstanceState.UPSTREAM_FAILED,
             TaskInstanceState.SKIPPED,
@@ -1366,7 +1370,6 @@ class SQLiteStateStore:
         message: str,
         log_path: str | None,
     ) -> None:
-        self.init_db()
         now = _utc_now()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -1400,7 +1403,6 @@ class SQLiteStateStore:
         task_id: str,
         key: str,
     ) -> Any:
-        self.init_db()
         with self._connect() as connection:
             row = connection.execute(
                 """
@@ -1416,7 +1418,6 @@ class SQLiteStateStore:
     def latest_task_log_path(
         self, dag_id: str, run_id: str, task_id: str
     ) -> str | None:
-        self.init_db()
         with self._connect() as connection:
             row = connection.execute(
                 """
@@ -1436,7 +1437,6 @@ class SQLiteStateStore:
         lease_seconds: int = 30,
         now: datetime | None = None,
     ) -> "SchedulerLeaseResult":
-        self.init_db()
         current = now or datetime.now(timezone.utc)
         if current.tzinfo is None:
             raise ValueError("now 必须带时区。")
@@ -1484,7 +1484,6 @@ class SQLiteStateStore:
     def renew_scheduler_lease(
         self, *, owner: str, lease_seconds: int, now: datetime | None = None
     ) -> bool:
-        self.init_db()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             current = now or datetime.now(timezone.utc)
@@ -1501,7 +1500,6 @@ class SQLiteStateStore:
         return updated == 1
 
     def release_scheduler_lease(self, *, owner: str) -> None:
-        self.init_db()
         with self._connect() as connection:
             connection.execute(
                 "DELETE FROM scheduler_lease WHERE lease_id = 'singleton' AND owner = ?",
@@ -1599,22 +1597,9 @@ class SQLiteStateStore:
         run_id: str,
         task_ids: list[str] | None = None,
     ) -> "ClearTaskResult":
-        self.init_db()
-        rows = self._select_clear_candidates(dag_id, run_id, task_ids)
-        allowed = {
-            TaskInstanceState.SUCCESS.value,
-            TaskInstanceState.FAILED.value,
-            TaskInstanceState.UPSTREAM_FAILED.value,
-            TaskInstanceState.SKIPPED.value,
-            TaskInstanceState.UP_FOR_RETRY.value,
-        }
-        to_clear = [task_id for task_id, state in rows if state in allowed]
-        blocked = [
-            ClearBlockedTask(task_id, state, "只允许 clear 终态或 up_for_retry 任务。")
-            for task_id, state in rows
-            if state not in allowed
-        ]
-        return ClearTaskResult(to_clear=to_clear, blocked=blocked, dry_run=True)
+        with self._connect() as connection:
+            connection.execute("BEGIN")
+            return self._check_clear(connection, dag_id, run_id, task_ids, dry_run=True)
 
     def clear_task_instances(
         self,
@@ -1625,80 +1610,21 @@ class SQLiteStateStore:
         actor: str = "cli",
         reason: str = "",
     ) -> "ClearTaskResult":
-        self.init_db()
-        now = _utc_now()
-        with self._connect() as connection:
+        # 执行器在读取任务状态并派发时持有同一把锁，避免依据旧状态派发。
+        with self.run_lock(dag_id, run_id) as acquired, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            rows = self._select_clear_candidates(
-                dag_id, run_id, task_ids, connection=connection
+            plan = self._check_clear(
+                connection,
+                dag_id,
+                run_id,
+                task_ids,
+                dry_run=False,
+                run_lock_busy=not acquired,
             )
-            allowed = {
-                "success",
-                "failed",
-                "upstream_failed",
-                "skipped",
-                "up_for_retry",
-            }
-            to_clear = [task_id for task_id, state in rows if state in allowed]
-            blocked = [
-                ClearBlockedTask(
-                    task_id, state, "只允许 clear 终态或 up_for_retry 任务。"
-                )
-                for task_id, state in rows
-                if state not in allowed
-            ]
-            if blocked or not to_clear:
-                return ClearTaskResult(
-                    to_clear=to_clear, blocked=blocked, dry_run=False
-                )
-            run = connection.execute(
-                "SELECT state, run_type, backfill_id, backfill_max_active_runs "
-                "FROM dag_run "
-                "WHERE dag_id = ? AND run_id = ?",
-                (dag_id, run_id),
-            ).fetchone()
-            if run and run[0] in ("success", "failed"):
-                if run[1] == "backfill":
-                    if run[3] is None:
-                        # 旧运行没有该列的值，沿用 backfill 元数据中的上限。
-                        limit_row = connection.execute(
-                            "SELECT max_active_runs FROM backfill "
-                            "WHERE dag_id = ? AND backfill_id = ?",
-                            (dag_id, run[2]),
-                        ).fetchone()
-                        limit = limit_row[0] if limit_row else None
-                    else:
-                        limit = run[3] if run[3] > 0 else None
-                    active = connection.execute(
-                        "SELECT COUNT(*) FROM dag_run WHERE dag_id = ? "
-                        "AND run_type = 'backfill' AND backfill_id = ? "
-                        "AND state IN ('queued', 'running')",
-                        (dag_id, run[2]),
-                    ).fetchone()[0]
-                else:
-                    limit_row = connection.execute(
-                        "SELECT max_active_runs FROM dag_definition WHERE dag_id = ?",
-                        (dag_id,),
-                    ).fetchone()
-                    limit = limit_row[0] if limit_row else 1
-                    active = connection.execute(
-                        "SELECT COUNT(*) FROM dag_run WHERE dag_id = ? "
-                        "AND run_type != 'backfill' "
-                        "AND state IN ('queued', 'running')",
-                        (dag_id,),
-                    ).fetchone()[0]
-                if limit is not None and active >= limit:
-                    group = f"backfill {run[2]!r}" if run[1] == "backfill" else "DAG"
-                    blocked = [
-                        ClearBlockedTask(
-                            task_id, state, f"{group} 已达到 max_active_runs={limit}。"
-                        )
-                        for task_id, state in rows
-                        if task_id in to_clear
-                    ]
-                    return ClearTaskResult(
-                        to_clear=to_clear, blocked=blocked, dry_run=False
-                    )
+            to_clear = plan.to_clear
+            if plan.blocked or not to_clear:
+                return plan
+            now = _utc_now()
             payload = {"actor": actor, "reason": reason, "task_ids": to_clear}
             placeholders = ",".join("?" for _ in to_clear)
             params = [dag_id, run_id, *to_clear]
@@ -1753,10 +1679,9 @@ class SQLiteStateStore:
                     now,
                 ),
             )
-        return ClearTaskResult(to_clear=to_clear, blocked=[], dry_run=False)
+        return plan
 
     def list_audit_actions(self) -> list[tuple[str, str | None, str | None]]:
-        self.init_db()
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -1767,14 +1692,18 @@ class SQLiteStateStore:
             ).fetchall()
         return [(row[0], row[1], row[2]) for row in rows]
 
-    def _select_clear_candidates(
+    def _check_clear(
         self,
+        connection: sqlite3.Connection,
         dag_id: str,
         run_id: str,
         task_ids: list[str] | None,
         *,
-        connection: sqlite3.Connection | None = None,
-    ) -> list[tuple[str, str | None]]:
+        dry_run: bool,
+        run_lock_busy: bool = False,
+    ) -> ClearTaskResult:
+        if task_ids == []:
+            return ClearTaskResult([], [], dry_run)
         query = """
             SELECT task_id, state
             FROM task_instance
@@ -1782,24 +1711,145 @@ class SQLiteStateStore:
         """
         params: list[Any] = [dag_id, run_id]
         if task_ids is not None:
-            if not task_ids:
-                return []
             placeholders = ",".join("?" for _ in task_ids)
             query += f" AND task_id IN ({placeholders})"
             params.extend(task_ids)
         query += " ORDER BY task_id"
-        if connection is None:
-            with self._connect() as connection:
-                rows = connection.execute(query, params).fetchall()
-        else:
-            rows = connection.execute(query, params).fetchall()
-        return [(row[0], row[1]) for row in rows]
+        rows = connection.execute(query, params).fetchall()
+        if task_ids is not None:
+            missing = set(task_ids) - {task_id for task_id, _ in rows}
+            if missing:
+                return ClearTaskResult(
+                    [],
+                    [
+                        ClearBlockedTask(task_id, None, "任务不存在。")
+                        for task_id in sorted(missing)
+                    ],
+                    dry_run,
+                )
+        allowed = {"success", "failed", "upstream_failed", "skipped", "up_for_retry"}
+        to_clear = [task_id for task_id, state in rows if state in allowed]
+        blocked = [
+            ClearBlockedTask(task_id, state, "只允许 clear 终态或 up_for_retry 任务。")
+            for task_id, state in rows
+            if state not in allowed
+        ]
+        if to_clear and not blocked:
+            dispatched = connection.execute(
+                "SELECT task_id FROM task_instance WHERE dag_id = ? AND run_id = ? "
+                "AND state IN ('queued', 'running') ORDER BY task_id LIMIT 1",
+                (dag_id, run_id),
+            ).fetchone()
+            if dispatched:
+                reason = (
+                    f"任务 {dispatched[0]!r} 已入队或正在运行，清理可能移除其输入。"
+                )
+            else:
+                reason = self._clear_capacity_reason(connection, dag_id, run_id)
+                if reason is None and run_lock_busy:
+                    reason = "该运行正在调度任务，请稍后重新预览。"
+            if reason:
+                blocked = [
+                    ClearBlockedTask(task_id, state, reason) for task_id, state in rows
+                ]
+        return ClearTaskResult(to_clear, blocked, dry_run)
 
-    def _connect(self) -> sqlite3.Connection:
+    def _clear_capacity_reason(
+        self, connection: sqlite3.Connection, dag_id: str, run_id: str
+    ) -> str | None:
+        run = connection.execute(
+            "SELECT state, run_type, backfill_id, backfill_max_active_runs "
+            "FROM dag_run WHERE dag_id = ? AND run_id = ?",
+            (dag_id, run_id),
+        ).fetchone()
+        if run is None or run[0] not in ("success", "failed"):
+            return None
+        _, run_type, backfill_id, limit = run
+        if run_type == "backfill":
+            if limit is None:
+                # 旧运行没有该列的值，沿用 backfill 元数据中的上限。
+                limit_row = connection.execute(
+                    "SELECT max_active_runs FROM backfill WHERE dag_id = ? AND backfill_id = ?",
+                    (dag_id, backfill_id),
+                ).fetchone()
+                limit = limit_row[0] if limit_row else None
+            elif limit < 1:
+                return None
+            if limit is None:
+                return None
+            active = connection.execute(
+                "SELECT COUNT(*) FROM dag_run WHERE dag_id = ? "
+                "AND run_type = 'backfill' AND backfill_id = ? "
+                "AND state IN ('queued', 'running')",
+                (dag_id, backfill_id),
+            ).fetchone()[0]
+            group = f"backfill {backfill_id!r}"
+        else:
+            limit_row = connection.execute(
+                "SELECT max_active_runs FROM dag_definition WHERE dag_id = ?",
+                (dag_id,),
+            ).fetchone()
+            limit = limit_row[0] if limit_row else 1
+            active = connection.execute(
+                "SELECT COUNT(*) FROM dag_run WHERE dag_id = ? AND run_type != 'backfill' "
+                "AND state IN ('queued', 'running')",
+                (dag_id,),
+            ).fetchone()[0]
+            group = "DAG"
+        return f"{group} 已达到 max_active_runs={limit}。" if active >= limit else None
+
+    @contextmanager
+    def _connect(self, *, repair: bool = False) -> Iterator[sqlite3.Connection]:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(self.path)
-        connection.execute("PRAGMA foreign_keys=ON")
-        return connection
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute("PRAGMA foreign_keys=ON")
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            # 显式建库命令也可恢复缺失的表或索引。
+            if version < _SCHEMA_VERSION or (repair and version == _SCHEMA_VERSION):
+                _migrate_schema(connection)
+                connection.commit()
+            yield connection
+
+
+def _migrate_schema(connection: sqlite3.Connection) -> None:
+    # 新库的 WAL 切换与并发打开连接可能冲突，等待其他连接完成初始化。
+    deadline = time.monotonic() + 5
+    while connection.execute("PRAGMA journal_mode").fetchone()[0] != "wal":
+        try:
+            connection.execute("PRAGMA journal_mode=WAL").fetchone()
+        except sqlite3.OperationalError as exc:
+            if (
+                exc.sqlite_errorcode != sqlite3.SQLITE_BUSY
+                or time.monotonic() >= deadline
+            ):
+                raise
+            time.sleep(0.02)
+        else:
+            break
+
+    # 建表、兼容列及版本标记在同一写事务内完成。
+    connection.executescript("BEGIN IMMEDIATE;\n" + SCHEMA)
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(dag_run)")}
+    if "logical_timezone" not in columns:
+        connection.execute("ALTER TABLE dag_run ADD COLUMN logical_timezone TEXT")
+    if "backfill_max_active_runs" not in columns:
+        connection.execute(
+            "ALTER TABLE dag_run ADD COLUMN backfill_max_active_runs INTEGER"
+        )
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(dag_definition)")
+    }
+    if "max_active_runs" not in columns:
+        connection.execute(
+            "ALTER TABLE dag_definition ADD COLUMN max_active_runs INTEGER NOT NULL DEFAULT 1"
+        )
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(task_instance)")}
+    if "retry_base" not in columns:
+        connection.execute(
+            "ALTER TABLE task_instance ADD COLUMN retry_base INTEGER NOT NULL DEFAULT 0"
+        )
+        _restore_retry_baselines(connection)
+    connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
 @dataclass(frozen=True)

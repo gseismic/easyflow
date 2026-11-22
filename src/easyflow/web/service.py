@@ -35,6 +35,7 @@ from easyflow.web.catalog import (
 )
 
 _NOT_LOADED = object()
+_SOURCE_DISCOVERY_WAIT_SECONDS = 2
 _FACET_CACHE_SECONDS = 5
 _FACET_CACHE_SIZE = 16
 
@@ -159,12 +160,16 @@ def _parse_history_cursor(cursor: str) -> tuple[str, str, str]:
     return tuple(value)
 
 
+class DagDiscoveryPending(RuntimeError):
+    pass
+
+
 class WebService:
     def __init__(self, dags_folder: str, database_url: str, log_root: str) -> None:
         self.dags_folder = Path(dags_folder).resolve()
         self.log_root = Path(log_root).resolve()
         self.store = SQLiteStateStore(database_url)
-        self.store.init_db()
+        self.store.init_db(repair=False)
         self._lock = threading.Lock()
         self._facet_lock = threading.Lock()
         self._facet_cache: OrderedDict[tuple, tuple[float, dict]] = OrderedDict()
@@ -206,12 +211,19 @@ class WebService:
             return self.discovery.scan(wait_seconds=0.5)
 
     def source(self, dag_id: str) -> DagSource:
-        source = next(
-            (item for item in self.discover().sources if item.dag_id == dag_id), None
-        )
-        if source is None:
-            raise LookupError(f"找不到 DAG：{dag_id}")
-        return source
+        deadline = time.monotonic() + _SOURCE_DISCOVERY_WAIT_SECONDS
+        while True:
+            with self._lock:
+                remaining = max(0, deadline - time.monotonic())
+                discovered = self.discovery.scan(
+                    dag_id=dag_id, wait_seconds=min(0.5, remaining)
+                )
+            if discovered.sources:
+                return discovered.sources[0]
+            if not discovered.pending:
+                raise LookupError(f"找不到 DAG：{dag_id}")
+            if time.monotonic() >= deadline:
+                raise DagDiscoveryPending(f"正在解析 DAG：{dag_id}，请稍后重试。")
 
     def rows(self, query: str, params: tuple = ()) -> list[dict]:
         with sqlite3.connect(self.store.path) as connection:
@@ -755,6 +767,8 @@ class WebService:
                     result["definition_matches"] = result[
                         "definition_hash"
                     ] == definition_hash_for_dag(source.dag, source.file_path)
+            except DagDiscoveryPending:
+                result["definition_pending"] = True
             except (LookupError, OSError, ValueError):
                 pass
         return result

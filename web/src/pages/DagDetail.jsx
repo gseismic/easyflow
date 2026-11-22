@@ -30,7 +30,14 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
   const [taskId, setTaskId] = useState("");
   const [attempt, setAttempt] = useState("");
   const tab = requestedTab === "source" && !isAdmin ? "run" : requestedTab;
-  const [dialog, setDialog] = useState("");
+  const [dialog, setDialog] = useState(null);
+  const routeHash = window.location.hash;
+  const activeDialog = dialog?.routeHash === routeHash ? dialog : null;
+  const openDialog = (kind) => setDialog({ kind, routeHash });
+  const closeDialog = () => setDialog((current) => current === activeDialog ? null : current);
+  useEffect(() => {
+    setDialog((current) => current?.routeHash === routeHash ? current : null);
+  }, [routeHash]);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -86,9 +93,13 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
     }
   };
   const triggered = (result) => {
+    if (window.location.hash !== activeDialog.routeHash) {
+      refresh();
+      return;
+    }
     setRunId(result.run_id);
     setAttempt("");
-    setDialog("");
+    closeDialog();
     window.location.hash = workflowHref(dagId);
     setNotice(
       result.paused
@@ -100,7 +111,7 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
     refresh();
   };
   const cleared = (result) => {
-    setDialog("");
+    closeDialog();
     setNotice(`已清理 ${result.to_clear.length} 个任务，等待调度器执行。`);
     refresh();
   };
@@ -148,7 +159,7 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
             </button>
             <button
               className="button subtle"
-              onClick={() => setDialog("trigger")}
+              onClick={() => openDialog("trigger")}
             >
               ＋ 触发运行
             </button>
@@ -192,7 +203,7 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
                   查看全部运行
                 </a>
                 {isAdmin && (
-                  <button className="link-button" onClick={() => setDialog("backfill")}>
+                  <button className="link-button" onClick={() => openDialog("backfill")}>
                     回补预览
                   </button>
                 )}
@@ -242,9 +253,11 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
           {tab === "tasks" && <>
           {run.data && !run.error && run.data.definition_matches !== true && (
             <div className="notice warning">
-              {run.data.definition_matches === false
-                ? "此运行的定义与当前 DAG 不同。依赖图展示当前定义，历史任务请参考下方列表。"
-                : "无法确认此运行与当前 DAG 定义是否一致；依赖图展示当前定义。"}
+              {run.data.definition_pending
+                ? "当前 DAG 定义仍在解析，匹配状态稍后会自动更新。"
+                : run.data.definition_matches === false
+                  ? "此运行的定义与当前 DAG 不同。依赖图展示当前定义，历史任务请参考下方列表。"
+                  : "无法确认此运行与当前 DAG 定义是否一致；依赖图展示当前定义。"}
             </div>
           )}
           <section className="card graph-card">
@@ -312,30 +325,30 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
               attempt={attempt}
               setAttempt={setAttempt}
               isAdmin={isAdmin}
-              onClear={() => setDialog("clear")}
+              onClear={() => openDialog("clear")}
             />
           </>}
         </>
       )}
-      {isAdmin && dialog === "trigger" && (
+      {isAdmin && activeDialog?.kind === "trigger" && (
         <TriggerDialog
           dagId={dagId}
           paused={dag.paused}
-          onClose={() => setDialog("")}
+          onClose={closeDialog}
           onDone={triggered}
         />
       )}
-      {isAdmin && dialog === "clear" && (
+      {isAdmin && activeDialog?.kind === "clear" && (
         <ClearDialog
           dagId={dagId}
           runId={runId}
           taskId={taskId}
-          onClose={() => setDialog("")}
+          onClose={closeDialog}
           onDone={cleared}
         />
       )}
-      {isAdmin && dialog === "backfill" && (
-        <BackfillDialog dagId={dagId} onClose={() => setDialog("")} />
+      {isAdmin && activeDialog?.kind === "backfill" && (
+        <BackfillDialog dagId={dagId} onClose={closeDialog} />
       )}
     </main>
   );

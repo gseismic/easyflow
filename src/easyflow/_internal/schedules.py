@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone, tzinfo
+from datetime import UTC, date, datetime, time, timedelta, timezone, tzinfo
+from itertools import islice
 from typing import Any
 
 from easyflow._internal.cron import (
@@ -144,41 +146,81 @@ def backfill_intervals(
     start_bound: datetime | None = None,
     end_bound: datetime | None = None,
 ) -> list[DataInterval]:
+    if max_intervals is not None and max_intervals < 1:
+        raise ValueError("max_intervals 必须大于 0。")
+    bounds = backfill_logical_date_bounds(
+        schedule,
+        start_date,
+        end_date,
+        tz,
+        anchor=anchor,
+        start_bound=start_bound,
+        end_bound=end_bound,
+    )
+    if bounds is None:
+        return []
+    intervals = iter_backfill_intervals(schedule, *bounds)
+    if max_intervals is None:
+        return list(intervals)
+    preview = list(islice(intervals, max_intervals + 1))
+    if len(preview) > max_intervals:
+        raise ValueError(
+            f"回补预览最多支持 {max_intervals} 个区间；请缩小范围或使用带时区的精确时间分段预览。"
+        )
+    return preview
+
+
+def backfill_logical_date_bounds(
+    schedule: str | timedelta | None,
+    start_date: date | datetime,
+    end_date: date | datetime,
+    tz: tzinfo = UTC,
+    *,
+    anchor: datetime | None = None,
+    start_bound: datetime | None = None,
+    end_bound: datetime | None = None,
+) -> tuple[datetime, datetime] | None:
+    """计算裁剪后的首尾逻辑日期，保留原调度锚点。"""
     if schedule is None:
         raise ValueError("无 schedule 的 DAG 不支持 backfill。")
     start = _backfill_boundary(start_date, tz, end=False)
     end = _backfill_boundary(end_date, tz, end=True)
     if _utc(end) < _utc(start):
         raise ValueError("end-date 必须大于等于 start-date。")
-    if max_intervals is not None and max_intervals < 1:
-        raise ValueError("max_intervals 必须大于 0。")
     anchor = anchor or start
     if start_bound is not None and _utc(start_bound) > _utc(start):
         start = start_bound.astimezone(tz)
     if end_bound is not None and _utc(end_bound) < _utc(end):
         end = end_bound.astimezone(tz)
     if _utc(start) > _utc(end):
-        return []
+        return None
     if schedule == "@once":
-        logical = anchor.astimezone(tz) if anchor is not None else start
-        return (
-            [interval_for_logical_date(schedule, logical)]
-            if _utc(start) <= _utc(logical) <= _utc(end)
-            else []
-        )
-    current = _ceil_logical_date(schedule, start, anchor=anchor)
-    intervals = []
-    while _utc(current) <= _utc(end):
-        if max_intervals is not None and len(intervals) >= max_intervals:
-            raise ValueError(
-                f"回补预览最多支持 {max_intervals} 个区间；请缩小范围或使用带时区的精确时间分段预览。"
-            )
-        intervals.append(interval_for_logical_date(schedule, current))
+        logical = anchor.astimezone(tz)
+        return (logical, logical) if _utc(start) <= _utc(logical) <= _utc(end) else None
+    first = _ceil_logical_date(schedule, start, anchor=anchor)
+    if _utc(first) > _utc(end):
+        return None
+    if isinstance(schedule, timedelta):
+        steps = (_utc(end) - _utc(first)) // schedule
+        last = (_utc(first) + steps * schedule).astimezone(tz)
+    else:
+        last = cron_previous_at_or_before(_expression(schedule), end)
+    return first, last
+
+
+def iter_backfill_intervals(
+    schedule: str | timedelta, first: datetime, last: datetime
+) -> Iterator[DataInterval]:
+    current = first
+    end = _utc(last)
+    while _utc(current) <= end:
+        yield interval_for_logical_date(schedule, current)
+        if _utc(current) == end:
+            break
         next_value = next_logical_date(schedule, current)
         if _utc(next_value) <= _utc(current):
             raise ValueError("schedule 产生了非递增区间。")
         current = next_value
-    return intervals
 
 
 def parse_backfill_boundary(value: str) -> date | datetime:

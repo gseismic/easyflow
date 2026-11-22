@@ -118,7 +118,16 @@ class AsyncDagDiscovery:
             for path, (_, future) in self.pending.items()
             if path not in self.entries
         ]
-        if wait_seconds and missing:
+        target_ready = (
+            dag_id is not None
+            and sum(
+                source.dag_id == dag_id
+                for _, _, result in self.entries.values()
+                for source in result.sources
+            )
+            == 1
+        )
+        if wait_seconds and missing and not target_ready:
             wait(
                 missing,
                 timeout=wait_seconds,
@@ -232,9 +241,9 @@ def inspect_dags_from_file(
 def _inspect_dags_in_process(file_path: str | Path) -> DagDiscoveryResult:
     path = Path(file_path).resolve()
     try:
-        with local_source_imports(path):
+        with local_source_imports(path) as finder:
             module = _load_module(path)
-            sources, issues = _sources_from_module(module, path)
+            sources, issues = _sources_from_module(module, path, finder)
     except Exception as exc:
         return DagDiscoveryResult([], [DagParseIssue(path, None, str(exc))])
     sources, duplicate_issues = _remove_duplicate_dag_ids(sources)
@@ -341,7 +350,7 @@ def _load_module(path: Path) -> ModuleType:
 
 
 def _sources_from_module(
-    module: ModuleType, path: Path
+    module: ModuleType, path: Path, finder: LocalSourceFinder
 ) -> tuple[list[DagSource], list[DagParseIssue]]:
     candidates = [value for value in vars(module).values() if isinstance(value, DAG)]
     candidates.extend(module.__easyflow_registered_dags__)
@@ -357,7 +366,7 @@ def _sources_from_module(
             validate_schedule(dag.schedule)
             dag._easyflow_source_sha256 = module.__easyflow_source_sha256__
             dag._easyflow_dependency_hashes = _local_dependency_hashes(
-                module, path, dag
+                module, path, dag, finder
             )
         except Exception as exc:  # noqa: BLE001 - 单个 DAG 无效不应阻塞同文件其他 DAG。
             issues.append(DagParseIssue(path, dag.dag_id, str(exc)))
@@ -496,9 +505,8 @@ def _file_hash(path: Path) -> str:
 
 
 def _local_dependency_hashes(
-    module: ModuleType, dag_path: Path, dag: DAG
+    module: ModuleType, dag_path: Path, dag: DAG, finder: LocalSourceFinder
 ) -> dict[str, str]:
-    finder = LocalSourceFinder(dag_path)
     pending: list[ModuleType] = [module]
     seen: set[str] = set()
     files: dict[str, str] = {}
@@ -532,7 +540,7 @@ def _local_dependency_hashes(
         seen.add(current.__name__)
         for value in vars(current).values():
             include(value)
-    return files
+    return files | finder.dependency_hashes
 
 
 def _write_snapshot(file_path: str, output_path: str) -> None:

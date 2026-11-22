@@ -17,7 +17,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from easyflow.sdk.exceptions import StateConflictError
 from easyflow.web.auth import AuthStore, COOKIE_NAME, LoginThrottle, csrf_token
 from easyflow.web.routers import auth, catalog, dags, history, runs
-from easyflow.web.service import WebService
+from easyflow.web.service import DagDiscoveryPending, WebService
 
 STATIC = Path(__file__).parent / "static"
 
@@ -81,6 +81,12 @@ def create_app(*, dags_folder: str, database_url: str, log_root: str) -> FastAPI
     @app.exception_handler(LookupError)
     async def not_found(request: Request, exc: LookupError):
         return JSONResponse({"detail": str(exc)}, status_code=404)
+
+    @app.exception_handler(DagDiscoveryPending)
+    async def discovery_pending(request: Request, exc: DagDiscoveryPending):
+        return JSONResponse(
+            {"detail": str(exc)}, status_code=503, headers={"Retry-After": "1"}
+        )
 
     @app.exception_handler(ValueError)
     @app.exception_handler(StateConflictError)

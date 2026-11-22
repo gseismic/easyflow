@@ -56,7 +56,7 @@ export default function ClearDialog({ dagId, runId, taskId, onClose, onDone }) {
       )}
       {preview && (
         <div className="preview-box">
-          <strong>将清理 {preview.to_clear.length} 个任务</strong>
+          <strong>{preview.blocked.length ? "本次清理受阻" : `将清理 ${preview.to_clear.length} 个任务`}</strong>
           <div>{preview.to_clear.join("、") || "无可清理任务"}</div>
           {preview.blocked.map((item) => (
             <div className="danger-text" key={item.task_id}>

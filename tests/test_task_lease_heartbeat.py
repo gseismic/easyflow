@@ -53,7 +53,7 @@ with DAG("lease_task") as dag:
         try_number=1,
         owner="worker-a",
         lease_seconds=5,
-        now=start + timedelta(seconds=1),
+        now=start + timedelta(milliseconds=900),
     )
     assert (
         store.recover_orphaned_task(

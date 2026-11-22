@@ -76,11 +76,13 @@ export default function HistoryRun({ dagId, runId, requestedTaskId, requestedAtt
           </section>
           {(run.data.definition_matches !== true || dag.error) && (
             <div className="notice warning">
-              {dag.error && run.data.definition_matches === true
-                ? "当前工作流信息加载失败；下面显示已保存的任务状态和日志。"
-                : run.data.definition_matches === false
-                  ? "工作流定义已变化；历史上下游无法确认，下面显示已保存的任务状态和日志。"
-                  : "无法确认历史工作流定义；下面显示已保存的任务状态和日志。"}
+              {run.data.definition_pending
+                ? "当前 DAG 定义仍在解析，匹配状态稍后会自动更新。"
+                : dag.error && run.data.definition_matches === true
+                  ? "当前工作流信息加载失败；下面显示已保存的任务状态和日志。"
+                  : run.data.definition_matches === false
+                    ? "工作流定义已变化；历史上下游无法确认，下面显示已保存的任务状态和日志。"
+                    : "无法确认历史工作流定义；下面显示已保存的任务状态和日志。"}
             </div>
           )}
           <section className="card history-tasks">
