@@ -44,11 +44,12 @@ def _search(
     instant = value.astimezone(timezone.utc)
     wall = value.replace(tzinfo=None, second=0, microsecond=0)
     # 回拨附近同一个墙上时间有两个真实时刻，需搜索相邻的墙上时间。
-    nearby_transition = (instant - timedelta(days=1)).astimezone(zone).utcoffset() != (
-        instant + timedelta(days=1)
-    ).astimezone(zone).utcoffset()
+    before = (instant - timedelta(days=1)).astimezone(zone).utcoffset()
+    after = (instant + timedelta(days=1)).astimezone(zone).utcoffset()
+    shift = abs(after - before) if before is not None and after is not None else timedelta(0)
+    window = max(timedelta(hours=4), shift) if shift else timedelta(0)
     direction = 1 if forward else -1
-    cursor = wall - timedelta(hours=4 * direction) if nearby_transition else wall
+    cursor = wall - direction * window
     if croniter.match(expression, cursor, day_or=True):
         candidate_wall = cursor
     else:
@@ -81,14 +82,10 @@ def _search(
                 )
             ):
                 best = candidate
-        if best is not None:
-            if (
-                not nearby_transition
-                or direction
-                * (candidate_wall - best.replace(tzinfo=None)).total_seconds()
-                >= 4 * 3600
-            ):
-                return best
+        if best is not None and (
+            not window or direction * (candidate_wall - best.replace(tzinfo=None)) >= window
+        ):
+            return best
         try:
             iterator = croniter(expression, candidate_wall, day_or=True)
             candidate_wall = (

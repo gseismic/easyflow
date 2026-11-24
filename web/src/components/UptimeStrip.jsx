@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { workflowHref } from "../listRoute";
 import { createSlotDescriber, dailyUptime, localDay, uptimeRunHref, uptimeSlotKey, uptimeTicks } from "../uptime";
 import UptimeFailures from "./UptimeFailures";
@@ -9,12 +9,23 @@ export default function UptimeStrip({ dagId, slots, error, period = "day", onOpe
   const [focused, setFocused] = useState(null);
   const panelId = useId();
   const buttons = useRef([]);
+  const currentSelection = slots?.find(slot => uptimeSlotKey(slot, period) === selection?.key);
+  const pinnedFailure = period === "recent" && selection?.failure;
+  const selected = pinnedFailure || currentSelection;
+  useEffect(() => {
+    if (period !== "recent" || !currentSelection?.failed_run_count) return;
+    const key = uptimeSlotKey(currentSelection, period);
+    setSelection(previous => previous?.key === key && !previous.failure
+      ? { ...previous, failure: currentSelection } : previous);
+  }, [currentSelection, period]);
   if (!slots) return <div className="uptime-placeholder" role="status">{error ? "运行时段不可用，请重试。" : "正在加载运行时段…"}</div>;
-  const currentSelection = slots.find(slot => uptimeSlotKey(slot, period) === selection?.key);
-  const selected = period === "recent" && (currentSelection || selection?.slot.failed_run_count > 0)
-    ? selection.slot : currentSelection;
   const focusIndex = Math.max(0, slots.findIndex(slot => uptimeSlotKey(slot, period) === focused));
-  const select = slot => setSelection({ key: uptimeSlotKey(slot, period), slot: { ...slot } });
+  const select = slot => {
+    const key = uptimeSlotKey(slot, period);
+    setSelection(previous => previous?.key === key && previous.failure ? previous : {
+      key, failure: period === "recent" && slot.failed_run_count > 0 ? slot : null,
+    });
+  };
   const activityCount = slots.filter((slot) => slot.run_count > 0).length;
   const failedCount = slots.filter((slot) => slot.failed_run_count > 0).length;
   const historyHref = workflowHref(dagId, "history");
@@ -49,7 +60,8 @@ export default function UptimeStrip({ dagId, slots, error, period = "day", onOpe
               const key = uptimeSlotKey(slot, period);
               const description = describe(slot);
               const isSelected = key === selection?.key;
-              const expandable = daily ? slot.state !== "future" && Boolean(renderDay) : slot.failed_run_count > 0;
+              const expandable = daily ? slot.state !== "future" && Boolean(renderDay) :
+                slot.failed_run_count > 0 || (isSelected && Boolean(pinnedFailure));
               return <button key={key}
                 ref={(node) => { buttons.current[index] = node; }}
                 className={`uptime-slot uptime-${slot.state}${daily ? " uptime-daily-slot" : ""}`}

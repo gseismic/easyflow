@@ -10,6 +10,42 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 SLOT_SECONDS = 30 * 60
 
+# 两个查询使用同一运行级失败来源。旧版可能在一次清理前重复记定义失配审计。
+_RUN_FAILURES = """
+    run_failures AS (
+        SELECT a.dag_id, a.run_id, a.created_at AS ended_at, r.state AS run_state,
+            CASE WHEN uptime_time(r.start_date) <= uptime_time(a.created_at)
+                THEN r.start_date END AS started_at,
+            CASE WHEN a.action = 'dag_definition_changed'
+                THEN 'DAG_DEFINITION_CHANGED' END AS error_code,
+            CASE WHEN a.action = 'dag_definition_changed'
+                THEN '运行未能继续，DAG 源码或本地依赖已改变。' END AS error_message
+        FROM failure_dags d CROSS JOIN audit_log a ON a.dag_id = d.dag_id
+        CROSS JOIN dag_run r ON r.dag_id = a.dag_id AND r.run_id = a.run_id
+        WHERE a.action IN ('dag_definition_changed', 'dag_run_failed')
+            AND COALESCE(julianday(a.created_at), 1e100) >= :start_jd
+            AND COALESCE(julianday(a.created_at), 0) < :end_jd
+            AND (a.action = 'dag_run_failed' OR COALESCE((
+                SELECT p.action FROM audit_log p
+                WHERE p.dag_id = a.dag_id AND p.run_id = a.run_id AND p.audit_id < a.audit_id
+                    AND p.action IN ('dag_definition_changed', 'tasks_clear')
+                ORDER BY p.audit_id DESC LIMIT 1
+            ), 'tasks_clear') = 'tasks_clear')
+        UNION ALL
+        SELECT r.dag_id, r.run_id, r.end_date, r.state, r.start_date, NULL, NULL
+        FROM failure_dags d CROSS JOIN dag_run r ON r.dag_id = d.dag_id
+        WHERE r.state = 'failed' AND r.end_date IS NOT NULL
+            AND COALESCE(julianday(r.end_date), 1e100) >= :start_jd
+            AND COALESCE(julianday(r.end_date), 0) < :end_jd
+            AND NOT EXISTS (
+                SELECT 1 FROM audit_log e
+                WHERE e.dag_id = r.dag_id AND e.run_id = r.run_id
+                    AND e.created_at = r.end_date
+                    AND e.action IN ('dag_definition_changed', 'dag_run_failed')
+            )
+    )
+"""
+
 
 def _timestamp(value: str | None) -> float | None:
     if value is None:
@@ -179,8 +215,8 @@ def workflow_uptime(
             },
         ).fetchall()
         failures = connection.execute(
-            """
-            WITH errors AS (
+            f"""
+            WITH failure_dags AS (SELECT dag_id FROM uptime_ids), {_RUN_FAILURES}, errors AS (
                 SELECT t.dag_id, t.run_id, uptime_time(t.ended_at) AS failed_at,
                     t.task_id, t.try_number
                 FROM uptime_ids i CROSS JOIN task_try t ON t.dag_id = i.dag_id
@@ -188,11 +224,8 @@ def workflow_uptime(
                     AND COALESCE(julianday(t.ended_at), 1e100) >= :start_jd
                     AND COALESCE(julianday(t.ended_at), 0) < :end_jd
                 UNION ALL
-                SELECT r.dag_id, r.run_id, uptime_time(r.end_date), NULL, NULL
-                FROM uptime_ids i CROSS JOIN dag_run r ON r.dag_id = i.dag_id
-                WHERE r.state = 'failed' AND r.end_date IS NOT NULL
-                    AND COALESCE(julianday(r.end_date), 1e100) >= :start_jd
-                    AND COALESCE(julianday(r.end_date), 0) < :end_jd
+                SELECT dag_id, run_id, uptime_time(ended_at), NULL, NULL
+                FROM run_failures
             ), bucketed AS (
                 SELECT uptime_slot(failed_at) AS position, * FROM errors
                 WHERE failed_at >= :start AND failed_at < :end AND failed_at <= :now
@@ -292,7 +325,7 @@ def workflow_failures(
     offset: int = 0,
     now: datetime | None = None,
 ) -> dict:
-    """按失败发生时间分页读取历史尝试；同格没有任务失败时补充运行级失败。"""
+    """按发生时间分页读取任务失败及运行级失败。"""
     if not dag_id:
         raise ValueError("请选择一个工作流。")
     if start_at.tzinfo is None or end_at.tzinfo is None:
@@ -314,8 +347,8 @@ def workflow_failures(
         "limit": limit,
         "offset": offset,
     }
-    failures = """
-        WITH failed_tasks AS (
+    failures = f"""
+        WITH failure_dags(dag_id) AS (VALUES (:dag_id)), {_RUN_FAILURES}, failed_tasks AS (
             SELECT t.run_id, t.task_id, t.try_number, t.started_at, t.ended_at,
                 uptime_time(t.ended_at) AS failed_at,
                 SUBSTR(t.error_code, 1, 200) AS error_code,
@@ -331,15 +364,17 @@ def workflow_failures(
         ), failures AS (
             SELECT * FROM failed_tasks
             UNION ALL
-            SELECT r.run_id, NULL, NULL, r.start_date, r.end_date,
-                uptime_time(r.end_date), NULL, NULL, 0, r.state
-            FROM dag_run r
-            WHERE r.dag_id = :dag_id AND r.state = 'failed'
-                AND COALESCE(julianday(r.end_date), 1e100) >= :start_jd
-                AND COALESCE(julianday(r.end_date), 0) < :end_jd
-                AND uptime_time(r.end_date) >= :start AND uptime_time(r.end_date) < :end
-                AND uptime_time(r.end_date) <= :now
-                AND NOT EXISTS (SELECT 1 FROM failed_tasks t WHERE t.run_id = r.run_id)
+            SELECT r.run_id, NULL, NULL, r.started_at, r.ended_at,
+                uptime_time(r.ended_at), r.error_code, r.error_message, 0, r.run_state
+            FROM run_failures r
+            WHERE uptime_time(r.ended_at) >= :start AND uptime_time(r.ended_at) < :end
+                AND uptime_time(r.ended_at) <= :now
+                AND NOT EXISTS (
+                    SELECT 1 FROM failed_tasks t WHERE t.run_id = r.run_id
+                        AND (r.error_code IS NULL OR (
+                            t.error_code = r.error_code AND t.ended_at = r.ended_at
+                        ))
+                )
         )
     """
     with sqlite3.connect(database) as connection:

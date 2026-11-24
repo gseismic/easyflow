@@ -5,10 +5,86 @@ from datetime import date, datetime, timezone
 import pytest
 
 from easyflow._internal.cron import validate_cron
-from easyflow._internal.dag_parser import discover_dag_sources
+from easyflow._internal.dag_parser import (
+    DagSource,
+    definition_matches,
+    discover_dag_sources,
+    inspect_dags_from_file,
+    load_dag_snapshot,
+    loaded_definition_hash,
+)
 from easyflow._internal.schedules import backfill_intervals, scheduler_intervals
 from easyflow.sdk import DAG
 from easyflow.cli import main
+
+
+def test_snapshot_serialization_error_does_not_hide_sibling_dags(tmp_path):
+    path = tmp_path / "two_dags.py"
+    path.write_text(
+        """from pathlib import Path
+from easyflow.sdk import DAG
+broken = DAG('broken', description=Path('not-json'))
+valid = DAG('valid', description='可用 DAG')
+""",
+        encoding="utf-8",
+    )
+    result = inspect_dags_from_file(path)
+    assert [(source.dag_id, source.dag.description) for source in result.sources] == [
+        ("valid", "可用 DAG")
+    ]
+    assert len(result.issues) == 1 and result.issues[0].dag_id == "broken"
+    assert "JSON serializable" in result.issues[0].message
+
+
+def test_definition_fingerprint_tracks_each_symlink_even_with_identical_sources(tmp_path):
+    left, right = tmp_path / "left.data", tmp_path / "right.data"
+    for target in left, right:
+        target.write_text("VALUE = 1\n", encoding="utf-8")
+    first = tmp_path / "alias_a.py"
+    second = tmp_path / "alias_b.py"
+    first.symlink_to(left)
+    second.symlink_to(right)
+    path = tmp_path / "links.py"
+    path.write_text(
+        "from alias_a import VALUE\nfrom alias_b import VALUE as SECOND\n"
+        "from easyflow.sdk import DAG\ndag = DAG('links')\n",
+        encoding="utf-8",
+    )
+    before = DagSource("links", path, load_dag_snapshot(path, "links"))
+    expected = loaded_definition_hash(before)
+    assert definition_matches(before, expected)
+    first.unlink()
+    second.unlink()
+    first.symlink_to(right)
+    second.symlink_to(left)
+    after = DagSource("links", path, load_dag_snapshot(path, "links"))
+    assert before.dag._easyflow_dependency_hashes == after.dag._easyflow_dependency_hashes
+    assert loaded_definition_hash(after) != expected
+    assert not definition_matches(before, expected)
+
+
+def test_snapshot_rejects_two_imports_of_different_bytes_from_one_target(tmp_path):
+    target = tmp_path / "shared.py"
+    target.write_text("VALUE = 'old'\n", encoding="utf-8")
+    for name in ("alias_a.py", "alias_b.py"):
+        (tmp_path / name).symlink_to(target)
+    path = tmp_path / "changing.py"
+    path.write_text(
+        f"""from pathlib import Path
+from alias_a import VALUE
+Path({str(target)!r}).write_text("VALUE = 'new'\\n", encoding='utf-8')
+from alias_b import VALUE as SECOND
+from easyflow.sdk import DAG
+dag = DAG('changing')
+""",
+        encoding="utf-8",
+    )
+    result = inspect_dags_from_file(path)
+    assert not result.sources
+    assert len(result.issues) == 1 and result.issues[0].dag_id == "changing"
+    assert "解析期间本地依赖已改变" in result.issues[0].message
+    refreshed = DagSource("changing", path, load_dag_snapshot(path, "changing"))
+    assert definition_matches(refreshed, loaded_definition_hash(refreshed))
 
 
 def test_cron_latest_interval_skips_weekend() -> None:

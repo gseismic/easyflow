@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
@@ -21,10 +21,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from easyflow._internal.schedules import validate_schedule
 from easyflow._internal.source_imports import LocalSourceFinder, local_source_imports
+from easyflow._internal.state_store import task_retry_settings
 from easyflow.sdk.dag import DAG, collect_registered_dags
 from easyflow.sdk.operators.base import BaseOperator
+from easyflow.sdk.testing import _resolve_retries
 
 PARSER_TIMEOUT_SECONDS = 30
+CLEAR_DEFINITION_MISMATCH = "当前 DAG 定义无法与该运行确认匹配，不能清理后重跑。"
 
 
 class DagSourceChanged(ValueError):
@@ -91,14 +94,17 @@ class AsyncDagDiscovery:
             self.pending.pop(path)[1].cancel()
 
         file_hash = cache(_file_hash)
+        dependency_target = cache(_dependency_target)
 
         def current(result: DagDiscoveryResult) -> bool:
             return all(
-                file_hash(filename) == digest
-                for source in result.sources
-                for filename, digest in _loaded_source_hashes(
-                    source.dag, source.file_path if source.dag_id == dag_id else None
+                _source_is_current(
+                    source.dag,
+                    source.file_path if source.dag_id == dag_id else None,
+                    file_hash,
+                    dependency_target,
                 )
+                for source in result.sources
             )
 
         def discard_stale() -> None:
@@ -154,6 +160,7 @@ class AsyncDagDiscovery:
                 return_when=FIRST_COMPLETED,
             )
             file_hash.cache_clear()
+            dependency_target.cache_clear()
             discard_stale()
             harvest()
         sources = [
@@ -359,27 +366,73 @@ def definition_hash_for_dag(
         if source_sha256 is not None or path.exists():
             payload["source_sha256"] = source_sha256 or _file_hash(path)
         dependencies = getattr(dag, "_easyflow_dependency_hashes", {})
-        payload["dependencies"] = {
-            name: digest if source_sha256 is not None else _file_hash(Path(name))
-            for name, digest in sorted(dependencies.items())
+        targets = getattr(dag, "_easyflow_dependency_targets", None)
+        if targets is None:
+            targets = {name: name for name in dependencies}
+        if source_sha256 is None:
+            targets = {name: _dependency_target(name) for name in targets}
+            dependencies = {
+                target or name: _file_hash(Path(target)) if target else "<missing>"
+                for name, target in targets.items()
+            }
+        payload["dependencies"] = dependencies
+        links = {
+            name: target for name, target in targets.items() if name != target
         }
+        # 普通文件沿用既有指纹；链接映射用于区分目标集合相同的切换。
+        if links:
+            payload["dependency_links"] = links
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _loaded_source_hashes(dag: DAG, file_path: Path | None) -> Iterator[tuple[Path, str]]:
+def loaded_definition_hash(source: DagSource) -> str:
+    return definition_hash_for_dag(
+        source.dag,
+        source.file_path,
+        source_sha256=getattr(source.dag, "_easyflow_source_sha256", None),
+    )
+
+
+def definition_matches(source: DagSource, expected: str | None) -> bool:
+    return (
+        expected is not None
+        and expected == loaded_definition_hash(source)
+        and dag_source_is_current(source.dag, source.file_path)
+    )
+
+
+def _dependency_target(name: str) -> str | None:
+    try:
+        return str(Path(name).resolve())
+    except (OSError, RuntimeError):
+        return None
+
+
+def _source_is_current(
+    dag: DAG,
+    file_path: Path | None,
+    file_hash: Callable[[Path], str],
+    dependency_target: Callable[[str], str | None],
+) -> bool:
     source_sha256 = getattr(dag, "_easyflow_source_sha256", None)
-    if file_path is not None and source_sha256 is not None:
-        yield file_path, source_sha256
-    for name, digest in getattr(dag, "_easyflow_dependency_hashes", {}).items():
-        yield Path(name), digest
+    if (
+        file_path is not None
+        and source_sha256 is not None
+        and file_hash(file_path) != source_sha256
+    ):
+        return False
+    return all(
+        dependency_target(name) == target
+        for name, target in getattr(dag, "_easyflow_dependency_targets", {}).items()
+    ) and all(
+        file_hash(Path(name)) == digest
+        for name, digest in getattr(dag, "_easyflow_dependency_hashes", {}).items()
+    )
 
 
 def dag_source_is_current(dag: DAG, file_path: str | Path) -> bool:
-    return all(
-        _file_hash(path) == digest
-        for path, digest in _loaded_source_hashes(dag, Path(file_path))
-    )
+    return _source_is_current(dag, Path(file_path), _file_hash, _dependency_target)
 
 
 @contextmanager
@@ -422,9 +475,15 @@ def _sources_from_module(
             dag.validate()
             validate_schedule(dag.schedule)
             dag._easyflow_source_sha256 = module.__easyflow_source_sha256__
-            dag._easyflow_dependency_hashes = _local_dependency_hashes(
-                module, path, dag, finder
-            )
+            dependencies = _local_dependencies(module, path, dag, finder)
+            hashes: dict[str, str] = {}
+            for target, digest in dependencies.values():
+                if hashes.setdefault(target, digest) != digest:
+                    raise DagSourceChanged(f"解析期间本地依赖已改变：{target}")
+            dag._easyflow_dependency_hashes = hashes
+            dag._easyflow_dependency_targets = {
+                name: target for name, (target, _) in dependencies.items()
+            }
         except Exception as exc:  # noqa: BLE001 - 单个 DAG 无效不应阻塞同文件其他 DAG。
             issues.append(DagParseIssue(path, dag.dag_id, str(exc)))
             continue
@@ -496,6 +555,22 @@ def _decode_delta(value: list[int] | None) -> timedelta | None:
     )
 
 
+def _snapshot_task(dag: DAG, task: BaseOperator) -> dict[str, Any]:
+    delay, _, maximum = task_retry_settings(dag, task)
+    return {
+        "task_id": task.task_id,
+        "operator_type": type(task).__name__,
+        "owner": task.owner,
+        "retries": _resolve_retries(dag, task),
+        "retry_delay": _encode_delta(delay),
+        "retry_exponential_backoff": task.retry_exponential_backoff,
+        "max_retry_delay": _encode_delta(maximum),
+        "trigger_rule": task.trigger_rule.value,
+        "depends_on_past": task.depends_on_past,
+        "upstream": sorted(task.upstream_task_ids),
+    }
+
+
 def _snapshot_dag(dag: DAG) -> dict[str, Any]:
     return {
         "dag_id": dag.dag_id,
@@ -512,21 +587,8 @@ def _snapshot_dag(dag: DAG) -> dict[str, Any]:
         "max_active_runs": dag.max_active_runs,
         "source_sha256": dag._easyflow_source_sha256,
         "dependency_hashes": dag._easyflow_dependency_hashes,
-        "tasks": [
-            {
-                "task_id": task.task_id,
-                "operator_type": type(task).__name__,
-                "owner": task.owner,
-                "retries": task.retries,
-                "retry_delay": _encode_delta(task.retry_delay),
-                "retry_exponential_backoff": task.retry_exponential_backoff,
-                "max_retry_delay": _encode_delta(task.max_retry_delay),
-                "trigger_rule": task.trigger_rule.value,
-                "depends_on_past": task.depends_on_past,
-                "upstream": sorted(task.upstream_task_ids),
-            }
-            for task in dag.tasks
-        ],
+        "dependency_targets": dag._easyflow_dependency_targets,
+        "tasks": [_snapshot_task(dag, task) for task in dag.tasks],
     }
 
 
@@ -564,6 +626,7 @@ def _restore_snapshot(snapshot: dict[str, Any]) -> DAG:
             dag.get_task(upstream).set_downstream(dag.get_task(item["task_id"]))
     dag._easyflow_source_sha256 = snapshot["source_sha256"]
     dag._easyflow_dependency_hashes = snapshot["dependency_hashes"]
+    dag._easyflow_dependency_targets = snapshot["dependency_targets"]
     dag._easyflow_snapshot = True
     return dag
 
@@ -575,12 +638,12 @@ def _file_hash(path: Path) -> str:
         return "<missing>"
 
 
-def _local_dependency_hashes(
+def _local_dependencies(
     module: ModuleType, dag_path: Path, dag: DAG, finder: LocalSourceFinder
-) -> dict[str, str]:
+) -> dict[str, tuple[str, str]]:
     pending: list[ModuleType] = [module]
     seen: set[str] = set()
-    files: dict[str, str] = {}
+    files: dict[str, tuple[str, str]] = {}
 
     def include(value: Any) -> None:
         if isinstance(value, ModuleType):
@@ -592,14 +655,16 @@ def _local_dependency_hashes(
         filename = getattr(candidate, "__file__", None)
         if not isinstance(filename, (str, os.PathLike)):
             return
-        path = Path(filename).resolve()
-        if path == dag_path or not finder.is_local(path):
+        origin = Path(filename).absolute()
+        loaded = finder.dependencies.get(str(origin))
+        target = Path(loaded[0]) if loaded is not None else origin.resolve()
+        if target == dag_path or not finder.is_local(origin, target):
             return
-        if str(path) not in files:
+        if str(origin) not in files:
             digest = getattr(candidate, "__easyflow_source_sha256__", None)
             if digest is None:
-                raise ValueError(f"无法确认本地依赖实际加载的源码：{path}")
-            files[str(path)] = digest
+                raise ValueError(f"无法确认本地依赖实际加载的源码：{origin}")
+            files[str(origin)] = (str(target), digest)
             pending.append(candidate)
 
     for task in dag.tasks:
@@ -611,7 +676,7 @@ def _local_dependency_hashes(
         seen.add(current.__name__)
         for value in vars(current).values():
             include(value)
-    return files | finder.dependency_hashes
+    return files | finder.dependencies
 
 
 def _write_snapshot(file_path: str, output_path: str) -> None:
@@ -621,8 +686,10 @@ def _write_snapshot(file_path: str, output_path: str) -> None:
         issues = list(result.issues)
         for source in result.sources:
             try:
-                dags.append(_snapshot_dag(source.dag))
-            except (TypeError, ValueError) as exc:
+                snapshot = _snapshot_dag(source.dag)
+                json.dumps(snapshot, ensure_ascii=False, allow_nan=False).encode("utf-8")
+                dags.append(snapshot)
+            except Exception as exc:  # noqa: BLE001 - 序列化错误只影响对应 DAG。
                 issues.append(DagParseIssue(path, source.dag_id, str(exc)))
         payload = {
             "dags": dags,
@@ -631,9 +698,7 @@ def _write_snapshot(file_path: str, output_path: str) -> None:
                 for issue in issues
             ],
         }
-    Path(output_path).write_text(
-        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
-    )
+    Path(output_path).write_text(json.dumps(payload, allow_nan=False), encoding="utf-8")
 
 
 if __name__ == "__main__":

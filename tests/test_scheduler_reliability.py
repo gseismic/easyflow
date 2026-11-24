@@ -24,6 +24,41 @@ def _write(path, text):
     return path
 
 
+@pytest.mark.parametrize("queued", [False, True])
+@pytest.mark.parametrize("executor", ["sequential", "local"])
+def test_failed_previous_run_does_not_block_depends_on_past(tmp_path, queued, executor):
+    source = """from datetime import datetime, timezone
+from easyflow.operators import EmptyOperator
+from easyflow.sdk import DAG
+with DAG('past', schedule='@daily', start_date=datetime(2026, 7, 1, tzinfo=timezone.utc)) as dag:
+    EmptyOperator(task_id='work', depends_on_past=True)
+"""
+    path = _write(tmp_path / "past.py", source)
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    runner = PersistentDagRunner(store, log_root=tmp_path / "logs")
+    dag = load_dag_from_file(path, "past")
+    first_date = datetime(2026, 7, 1, tzinfo=UTC)
+    first = runner.create_scheduled_run(
+        dag, file_path=path, interval=interval_for_logical_date(dag.schedule, first_date)
+    )
+    if queued:
+        assert store.queue_task("past", first, "work")
+    _write(path, source + "\n# 变更定义\n")
+
+    for days in range(1, 3):
+        now = first_date + timedelta(days=days)
+        runs = run_scheduler_once(
+            dag_id="past", file_path=path, store=store, now=now,
+            log_root=tmp_path / "logs", executor=executor,
+        )
+        latest = runs[-1]
+        assert latest.state.value == "failed" and latest.run_id != first
+        assert store.get_task_state("past", latest.run_id, "work") == "upstream_failed"
+        assert store.count_dag_runs(dag_id="past", run_type="scheduled") == days + 1
+    assert store.get_dag_run("past", first).state == "failed"
+    assert store.get_task_state("past", first, "work") == ("queued" if queued else None)
+
+
 def test_scheduler_resumes_cleared_and_orphaned_runs(tmp_path):
     path = _write(
         tmp_path / "job.py",

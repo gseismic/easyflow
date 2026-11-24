@@ -221,7 +221,7 @@ def _run_task_with_retries(
         except AirflowSkipException:
             xcom_store.clear_task(task.task_id)
             return TaskInstanceState.SKIPPED
-        except Exception as exc:
+        except (Exception, SystemExit) as exc:
             xcom_store.clear_task(task.task_id)
             last_error = exc
             if try_numbers[task.task_id] <= retries:

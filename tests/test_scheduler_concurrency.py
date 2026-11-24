@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import os
+import shlex
+import signal
 import subprocess
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
+
+import pytest
 
 from easyflow._internal.dag_parser import discover_dag_sources, load_dag_snapshot
 from easyflow._internal.persistent_runner import PersistentDagRunner
@@ -15,6 +19,45 @@ from easyflow.sdk import DAG
 
 
 NOW = datetime(2026, 7, 8, tzinfo=timezone.utc)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="使用 POSIX 控制台进程组")
+@pytest.mark.parametrize("operation", ["scheduler", "backfill"])
+def test_ctrl_c_stops_bash_worker_for_blocking_cli_batches(tmp_path, operation):
+    path = tmp_path / "slow.py"
+    started, late = tmp_path / "started", tmp_path / "late"
+    command = f"touch {shlex.quote(str(started))}; sleep 4; touch {shlex.quote(str(late))}"
+    path.write_text(
+        f"""from datetime import datetime, timezone
+from easyflow.operators import BashOperator
+from easyflow.sdk import DAG
+with DAG('slow', schedule='@once', start_date=datetime(2026, 7, 8, tzinfo=timezone.utc)) as dag:
+    BashOperator(task_id='work', bash_command={command!r})
+""",
+        encoding="utf-8",
+    )
+    args = (['scheduler', '--once', '--now', NOW.isoformat()] if operation == 'scheduler'
+            else ['backfill', 'create', '--start-date', '2026-07-08', '--end-date', '2026-07-08'])
+    process = subprocess.Popen(
+        [sys.executable, '-m', 'easyflow.cli', *args, '--dag-id', 'slow', '--file', str(path),
+         '--database-url', str(tmp_path / 'state.db'), '--log-root', str(tmp_path / 'logs'),
+         '--executor', 'local'],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while not started.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert started.exists(), "Bash 任务未启动"
+        os.killpg(process.pid, signal.SIGINT)
+        stdout, stderr = process.communicate(timeout=2.5)
+        assert process.returncode != 0, (stdout, stderr)
+        time.sleep(max(0, started.stat().st_mtime + 4.2 - time.time()))
+        assert not late.exists()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate(timeout=5)
 
 
 def test_expired_task_from_removed_dag_does_not_block_global_capacity(tmp_path) -> None:

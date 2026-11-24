@@ -1,18 +1,43 @@
 from __future__ import annotations
 
 import os
+import shlex
+import signal
 import sqlite3
 import subprocess
 import sys
-from datetime import UTC, datetime, timezone
+import time
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
 from easyflow._internal import local_executor
-from easyflow._internal.dag_parser import load_dag_from_file
+from easyflow._internal.dag_parser import load_dag_from_file, load_dag_snapshot
 from easyflow._internal.persistent_runner import PersistentDagRunner
 from easyflow._internal.state_store import SQLiteStateStore
 from easyflow.cli import main
+from easyflow.operators import EmptyOperator
+from easyflow.sdk import DAG
+
+
+@pytest.mark.skipif(os.name != "posix", reason="使用 POSIX 进程组信号")
+@pytest.mark.parametrize("worker_alive", [False, True])
+def test_process_group_eperm_only_ignored_after_worker_exit(monkeypatch, worker_alive):
+    process = SimpleNamespace(pid=123, is_alive=lambda: worker_alive)
+    worker = SimpleNamespace(process=process, ready=SimpleNamespace(value=1))
+
+    def deny_signal(pid, sig):
+        assert pid == process.pid and sig == signal.SIGKILL
+        raise PermissionError("进程组当前不可用")
+
+    monkeypatch.setattr(local_executor.os, "killpg", deny_signal)
+    if worker_alive:
+        with pytest.raises(PermissionError, match="进程组当前不可用"):
+            local_executor._signal_worker_group(worker, signal.SIGKILL)
+    else:
+        assert not local_executor._signal_worker_group(worker, signal.SIGKILL)
 
 
 def test_expired_local_worker_is_reaped_and_keeps_its_retry(tmp_path):
@@ -55,6 +80,101 @@ with DAG('retry') as dag:
         assert connection.execute(
             "SELECT try_number, state, error_code FROM task_try ORDER BY try_number"
         ).fetchall() == [(1, "failed", "TASK_PROCESS_LOST"), (2, "success", None)]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="验证 POSIX 本地进程组")
+@pytest.mark.parametrize(("inherit", "crash"), [(False, False), (True, False), (True, True)])
+def test_stopped_bash_worker_cannot_write_after_its_retry(tmp_path, inherit, crash):
+    path = tmp_path / "bash_retry.py"
+    started, late = tmp_path / "started", tmp_path / "late"
+    stop_parent = 'kill -KILL "$PPID"' if crash else ""
+    command = f"""
+if [ ! -e {shlex.quote(str(started))} ]; then
+    trap '' TERM
+    touch {shlex.quote(str(started))}
+    (sleep 2.5; touch {shlex.quote(str(late))}) &
+    {stop_parent}
+    wait
+else
+    echo 'retry completed'
+fi
+"""
+    retries = "None" if inherit else "1"
+    delay = "None" if inherit else "timedelta(seconds=1)"
+    maximum = "None" if inherit else "timedelta(milliseconds=200)"
+    path.write_text(
+        f"""from datetime import timedelta
+from multiprocessing import parent_process
+from pathlib import Path
+from easyflow._internal.task_heartbeat import TaskHeartbeat
+from easyflow.operators import BashOperator
+from easyflow.sdk import DAG
+
+if parent_process() is not None and not Path({str(started)!r}).exists():
+    TaskHeartbeat.start = lambda self: None
+
+with DAG('bash_retry', default_args={{'retries': 1, 'retry_delay': timedelta(seconds=1),
+                                     'max_retry_delay': timedelta(milliseconds=200)}}) as dag:
+    BashOperator(task_id='work', bash_command={command!r}, retries={retries},
+                 retry_delay={delay}, max_retry_delay={maximum}, retry_exponential_backoff=True)
+""",
+        encoding="utf-8",
+    )
+    dag = load_dag_snapshot(path, "bash_retry")
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    runner = PersistentDagRunner(store, log_root=tmp_path / "logs", task_lease_seconds=1)
+    run_id = runner.create_manual_run(dag, file_path=path, logical_date=datetime.now(UTC))
+    result = runner.run_existing(dag, run_id=run_id, file_path=path, executor="local")
+    assert result.state.value == "success"
+    assert started.exists()
+    assert store.pull_xcom("bash_retry", run_id, "work", "return_value") == "retry completed"
+    with sqlite3.connect(store.path) as connection:
+        attempts = connection.execute(
+            "SELECT state, error_code, started_at, ended_at FROM task_try ORDER BY try_number"
+        ).fetchall()
+    assert [attempt[:2] for attempt in attempts] == [("failed", "TASK_PROCESS_LOST"), ("success", None)]
+    first_failure = datetime.fromisoformat(attempts[0][3])
+    second_start = datetime.fromisoformat(attempts[1][2])
+    assert second_start - first_failure >= timedelta(milliseconds=200)
+    assert dag.get_task("work").retry_delay == timedelta(seconds=1)
+    assert dag.get_task("work").max_retry_delay == timedelta(milliseconds=200)
+    time.sleep(max(0, started.stat().st_mtime + 2.8 - time.time()))
+    assert not late.exists()
+
+
+def test_full_local_executor_does_not_write_already_queued_tasks(tmp_path, monkeypatch):
+    with DAG("full") as dag:
+        for i in range(500):
+            EmptyOperator(task_id=f"task_{i}")
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    runner = PersistentDagRunner(store, log_root=tmp_path / "logs")
+    now = datetime.now(UTC)
+    run_id = runner.create_manual_run(dag, file_path=None, logical_date=now)
+    store.start_task_try(dag.dag_id, run_id, "task_0", lease_seconds=60)
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE task_instance SET state = 'queued', queued_at = ? WHERE state IS NULL",
+            (now.isoformat(),),
+        )
+    statements = []
+    connect = store._connect
+
+    @contextmanager
+    def traced_connect():
+        with connect() as connection:
+            connection.set_trace_callback(statements.append)
+            yield connection
+
+    monkeypatch.setattr(store, "_connect", traced_connect)
+    executor = local_executor.LocalExecutor(
+        store=store, dag=dag, run_id=run_id, file_path=tmp_path / "unused.py",
+        log_root=tmp_path / "logs", task_lease_seconds=60, parallelism=1,
+        max_active_tasks=1, depends_on_past_decision=lambda **_: "ready", run_type="manual",
+        logical_date=now, conf={},
+    )
+    states = executor.run()
+    assert list(states.values()).count("queued") == 499 and states["task_0"] == "running"
+    assert not any(statement.startswith("BEGIN IMMEDIATE") for statement in statements)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="使用 POSIX SIGTERM 处理器")

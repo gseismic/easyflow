@@ -65,8 +65,9 @@ export default function Graph({ tasks, states, selected, onSelect }) {
           return (
             <button
               key={task.task_id}
-              onClick={() => onSelect(task.task_id)}
-              aria-pressed={selected === task.task_id}
+              onClick={onSelect ? () => onSelect(task.task_id) : undefined}
+              disabled={!onSelect}
+              aria-pressed={onSelect ? selected === task.task_id : undefined}
               className={`graph-node ${selected === task.task_id ? "selected" : ""}`}
               style={{ left: point.x, top: point.y }}
             >

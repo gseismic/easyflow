@@ -35,6 +35,10 @@ async original => {
     start_at: firstSlot.end_at, end_at: '2026-11-17T00:00:00Z',
     state: 'idle', run_count: 0, failed_run_count: 0,
   };
+  const waitingSlot = {
+    ...firstSlot, start_at: '2026-11-16T23:01:00Z', state: 'waiting', run_count: 0,
+    failed_run_count: 0, waiting_run_count: 1,
+  };
   const definitions = Object.fromEntries(ids.map(dag_id => [dag_id, {
     dag_id, definition_hash: historicalHash, task_count: 1,
     tasks: [{ task_id: 'example', upstream: [], downstream: [], operator_type: 'EmptyOperator' }],
@@ -62,7 +66,9 @@ async original => {
     if (path === '/api/workflows') return reply(route, { dags: Object.values(definitions), loading: false });
     if (path === '/api/workflows/uptime') {
       if (rolledUptime !== null && dagId === 'daily_sync' && get('lookback_hours')) {
-        return reply(route, { workflows: { daily_sync: rolledUptime ? [nextSlot] : [firstSlot, nextSlot] } });
+        const slots = rolledUptime === 'waiting' ? [waitingSlot, nextSlot] :
+          rolledUptime === 'failed' ? [firstSlot, nextSlot] : [nextSlot];
+        return reply(route, { workflows: { daily_sync: slots } });
       }
       const start = get('start_at') ? new Date(get('start_at')).getTime() : Date.now() - 86400000;
       const slots = Array.from({ length: 48 }, (_, i) => ({ start_at: new Date(start + i * 1800000).toISOString(), end_at: new Date(start + (i + 1) * 1800000).toISOString(), state: 'idle', run_count: 0, failed_run_count: 0 }));
@@ -340,17 +346,42 @@ async original => {
     await main.getByText('原始任务日志', { exact: true }).waitFor();
     result.historyVersions = '定义轮询先到时隐藏未核验的依赖，保留日志';
 
-    rolledUptime = false;
+    definition.definition_hash = historicalHash;
+    definition.tasks[0].upstream = ['原定义上游'];
+    await go('daily_sync', 'tasks');
+    const taskDetail = main.locator('.task-info');
+    await taskDetail.getByText('原定义上游', { exact: true }).waitFor();
+    definition.definition_hash = 'changed-definition';
+    definition.tasks[0].upstream = ['新定义上游'];
+    definition.tasks.push({ task_id: 'new-only', upstream: [], downstream: [], operator_type: 'EmptyOperator' });
+    await main.getByText(/此运行的定义与当前 DAG 不同/).waitFor();
+    await main.locator('.historical-tasks').getByRole('button', { name: /example.*成功/ }).waitFor();
+    check(await taskDetail.getByText(/原定义上游|新定义上游/).count() === 0, '任务页使用了未核验的上下游');
+    check(await main.locator('.graph-node').filter({ hasText: 'example' }).isDisabled(), '当前图可被当作历史任务选择器');
+    await main.getByRole('link', { name: '查看所选任务日志 →', exact: true }).click();
+    await main.getByText('原始任务日志', { exact: true }).waitFor();
+    check(await main.getByRole('combobox', { name: '选择日志任务' }).locator('option').allTextContents().then(values =>
+      values.join(',') === 'example'), '日志选择器混入当前定义独有的任务');
+    result.workflowTaskVersions = '保留历史状态和日志，当前依赖图独立显示';
+
+    rolledUptime = 'waiting';
     await go('daily_sync');
     const chart = main.locator('.uptime-detail-chart');
+    const waiting = chart.locator('button.uptime-waiting');
     const redSlot = chart.locator('button.uptime-failed');
-    await redSlot.click();
     const panel = chart.locator('.uptime-failures');
+    await waiting.click();
+    check(await waiting.getAttribute('aria-pressed') === 'true', '等待格没有选中');
+    check(await panel.count() === 0, '等待格提前打开失败详情');
+    rolledUptime = 'failed';
+    await panel.waitFor();
+    check(await redSlot.getAttribute('aria-expanded') === 'true', '等待格变红后没有自动展开');
+    result.waitingToFailure = '轮询后原位打开失败时段';
     await panel.locator('.uptime-failure-item').nth(1).click();
     const fullLog = panel.getByRole('link', { name: '查看完整日志 →', exact: true });
     check((await fullLog.getAttribute('href')).includes('attempt=2'), '没有选中第二次失败尝试');
     await panel.evaluate(node => { window.reviewFailurePanel = node; });
-    rolledUptime = true;
+    rolledUptime = 'gone';
     await redSlot.waitFor({ state: 'detached' });
     check(await panel.evaluate(node => window.reviewFailurePanel === node), '红格移出窗口后卸载了失败面板');
     check((await fullLog.getAttribute('href')).includes('attempt=2'), '红格移出窗口后丢失已选尝试');

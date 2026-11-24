@@ -175,6 +175,8 @@ test("失败时段查询与日志链接保留原边界、特殊 ID 和具体尝�
   assert.equal(fallback.has("attempt"), false);
   assert.notEqual(failureKey(item), failureKey({ ...item, try_number: 1 }));
   assert.notEqual(failureKey({ run_id: "a:b", task_id: "c", try_number: 1 }), failureKey({ run_id: "a", task_id: "b:c", try_number: 1 }));
+  const runError = { run_id: item.run_id, task_id: null, ended_at: "2026-11-16T23:10:00Z" };
+  assert.notEqual(failureKey(runError), failureKey({ ...runError, ended_at: "2026-11-16T23:15:00Z" }));
 });
 
 test("日志预览保留错误末尾，限制行数和长度并区分空日志与不可用日志", () => {

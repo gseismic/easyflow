@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -11,6 +12,119 @@ from easyflow._internal.persistent_runner import PersistentDagRunner
 from easyflow._internal.scheduler import create_backfill, run_scheduler_once
 from easyflow._internal.state_store import SQLiteStateStore
 from easyflow.cli import main
+
+
+def test_backfill_full_end_day_includes_both_last_hour_folds(tmp_path, capsys):
+    path = tmp_path / "santiago.py"
+    path.write_text(
+        """from datetime import datetime
+from zoneinfo import ZoneInfo
+from easyflow.sdk import DAG
+dag = DAG('santiago', schedule='30 23 * * *',
+          start_date=datetime(2026, 4, 4, tzinfo=ZoneInfo('America/Santiago')))
+""",
+        encoding="utf-8",
+    )
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    args = [
+        "backfill", "create", "--dag-id", "santiago", "--file", str(path),
+        "--start-date", "2026-04-04", "--end-date", "2026-04-04",
+        "--database-url", store.database_url, "--log-root", str(tmp_path / "logs"),
+    ]
+    assert main([*args, "--dry-run"]) == 0
+    assert capsys.readouterr().out.splitlines()[:2] == [
+        "2026-04-04T23:30:00-03:00\tcreate\tnone",
+        "2026-04-04T23:30:00-04:00\tcreate\tnone",
+    ]
+    assert main(args) == 0
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute(
+            "SELECT logical_date, state FROM dag_run ORDER BY logical_date"
+        ).fetchall() == [
+            ("2026-04-05T02:30:00+00:00", "success"),
+            ("2026-04-05T03:30:00+00:00", "success"),
+        ]
+
+
+@pytest.mark.parametrize("batch_size", [1, 2])
+def test_cli_reports_backfill_progress_when_definition_changes(tmp_path, capsys, monkeypatch, batch_size):
+    path = tmp_path / "interrupt.py"
+    original = "from easyflow.sdk import DAG\ndag = DAG('interrupt', schedule='@daily')\n"
+    path.write_text(original, encoding="utf-8")
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    first_finished = threading.Event()
+    create_run = PersistentDagRunner.create_backfill_run
+    run_existing = PersistentDagRunner.run_existing
+
+    def change_before_second(runner, dag, *, interval, **kwargs):
+        if interval.logical_date.day == 2:
+            assert first_finished.wait(5)
+            path.write_text(original + "# 部署新定义\n", encoding="utf-8")
+        return create_run(runner, dag, interval=interval, **kwargs)
+
+    def record_completion(runner, dag, *, run_id, **kwargs):
+        result = run_existing(runner, dag, run_id=run_id, **kwargs)
+        if "2026-07-01" in run_id and result.state.value == "success":
+            first_finished.set()
+        return result
+
+    args = [
+        "backfill", "create", "--dag-id", "interrupt", "--file", str(path),
+        "--database-url", store.database_url, "--log-root", str(tmp_path / "logs"),
+        "--reprocessing-behavior", "completed", "--max-active-runs", str(batch_size),
+        "--end-date", "2026-07-03",
+    ]
+    with monkeypatch.context() as context:
+        context.setattr(PersistentDagRunner, "create_backfill_run", change_before_second)
+        context.setattr(PersistentDagRunner, "run_existing", record_completion)
+        assert main([*args, "--start-date", "2026-07-01", "--backfill-id", "partial"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out.splitlines() == [
+        "backfill_id=partial", "interrupt backfill__partial__2026-07-01T00:00:00+00:00 success",
+    ]
+    assert "本地依赖已改变" in captured.err
+    assert "2026-07-02T00:00:00+00:00 至 2026-07-03T00:00:00+00:00" in captured.err
+    assert store.count_dag_runs(dag_id="interrupt", run_type="backfill") == 1
+    assert main([*args, "--start-date", "2026-07-02", "--backfill-id", "resumed"]) == 0
+    assert store.count_dag_runs(dag_id="interrupt", run_type="backfill") == 3
+
+
+def test_backfill_interruption_reports_exact_segments_across_midnight_rollback(tmp_path, monkeypatch):
+    path = tmp_path / "segments.py"
+    original = """from datetime import datetime
+from zoneinfo import ZoneInfo
+from easyflow.sdk import DAG
+dag = DAG('segments', schedule='0,30 0,23 * * *',
+          start_date=datetime(2009, 10, 31, tzinfo=ZoneInfo('America/Goose_Bay')))
+"""
+    path.write_text(original, encoding="utf-8")
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    args = {"dag_id": "segments", "file_path": path, "store": store, "log_root": tmp_path / "logs",
+            "reprocessing_behavior": "completed"}
+    create_run = PersistentDagRunner.create_backfill_run
+
+    def change_after_first_run(runner, dag, *, interval, **kwargs):
+        if interval.logical_date.hour == 0 and interval.logical_date.minute == 30:
+            path.write_text(original + "# changed\n", encoding="utf-8")
+        return create_run(runner, dag, interval=interval, **kwargs)
+
+    with monkeypatch.context() as context:
+        context.setattr(PersistentDagRunner, "create_backfill_run", change_after_first_run)
+        day = date(2009, 10, 31)
+        partial = create_backfill(**args, start_date=day, end_date=day)
+    zone = ZoneInfo("America/Goose_Bay")
+    remaining = [
+        (datetime(2009, 10, 31, 0, 30, tzinfo=zone), datetime(2009, 10, 31, 23, 30, tzinfo=zone)),
+        (datetime(2009, 10, 31, 23, 30, tzinfo=zone, fold=1), datetime(2009, 10, 31, 23, 30, tzinfo=zone, fold=1)),
+    ]
+    assert not partial.complete and len(partial.runs) == 1
+    assert [[value.isoformat() for value in pair] for pair in partial.pending_ranges] == [
+        [value.isoformat() for value in pair] for pair in remaining
+    ]
+    resumed = [create_backfill(**args, start_date=start, end_date=end) for start, end in remaining]
+    assert [len(summary.runs) for summary in resumed] == [3, 1]
+    assert all(summary.complete for summary in resumed)
+    assert store.count_dag_runs(dag_id="segments", run_type="backfill") == 5
 
 
 def test_concurrent_backfill_rechecks_depends_on_past_after_batch(tmp_path, monkeypatch):

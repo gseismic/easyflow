@@ -14,7 +14,7 @@ import TriggerDialog from "../components/TriggerDialog";
 import WorkflowUptime from "../components/WorkflowUptime";
 import WorkflowHeader from "../components/WorkflowHeader";
 import { workflowHref } from "../listRoute";
-import { runDetailUrl, taskLogUrl } from "../runApi";
+import { runDefinitionStatus, runDetailUrl, taskLogUrl } from "../runApi";
 import WorkflowRunHistory from "./WorkflowRunHistory";
 
 const runStates = {
@@ -57,6 +57,8 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
   }, [dag, runId]);
   const runPath = ["run", "tasks", "logs"].includes(tab) && runId ? runDetailUrl(dagId, runId) : null;
   const run = usePolling(runPath, 3000);
+  const definitionStatus = runDefinitionStatus(run.error ? null : run.data, detail.error ? null : dag);
+  const useCurrentTasks = !runId || definitionStatus === "matching";
   const hasTaskRecord = Boolean(run.data && Object.hasOwn(run.data.tasks || {}, taskId));
   const logPath =
     tab === "logs" && runPath && hasTaskRecord
@@ -65,9 +67,13 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
   const logs = usePolling(logPath, 3000);
   useEffect(() => {
     if (!["run", "tasks", "logs"].includes(tab) || (runId && !run.data && taskId)) return;
-    const ids = [...new Set([...(dag?.tasks || []).map((task) => task.task_id), ...Object.keys(run.data?.tasks || {})])];
-    if (ids.length && !ids.includes(taskId)) { setTaskId(ids[0]); setAttempt(""); }
-  }, [dag?.tasks, run.data, taskId, runId, tab]);
+    const currentIds = useCurrentTasks ? (dag?.tasks || []).map(task => task.task_id) : [];
+    const ids = [...new Set([...currentIds, ...Object.keys(run.data?.tasks || {})])];
+    if (!ids.includes(taskId)) {
+      setTaskId(ids[0] || "");
+      setAttempt("");
+    }
+  }, [dag?.tasks, run.data, taskId, runId, tab, useCurrentTasks]);
   const refresh = () => {
     detail.refresh();
     run.refresh();
@@ -130,18 +136,16 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
       </main>
     );
   const selectedTask =
-    dag.tasks.find((item) => item.task_id === taskId) ||
+    (useCurrentTasks && dag.tasks.find((item) => item.task_id === taskId)) ||
     (taskId ? { task_id: taskId } : null);
   const selectedDetail = run.error
     ? undefined
     : run.data?.task_details?.[taskId];
-  const extraTasks = Object.keys(run.data?.tasks || {}).filter(
-    (id) => !dag.tasks.some((task) => task.task_id === id),
+  const historicalTasks = Object.keys(run.data?.tasks || {}).filter(
+    (id) => !useCurrentTasks || !dag.tasks.some((task) => task.task_id === id),
   );
   const states = runId
-    ? run.error
-      ? undefined
-      : run.data?.tasks
+    ? (useCurrentTasks ? run.data?.tasks : undefined)
     : Object.fromEntries(dag.tasks.map((task) => [task.task_id, null]));
   return (
     <main className="page detail-page">
@@ -251,39 +255,41 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
             {tab === "run" && run.data && !run.error && <RunMetadata run={run.data} />}
           </section>
           {tab === "tasks" && <>
-          {run.data && !run.error && run.data.definition_matches !== true && (
+          {run.data && !run.error && !useCurrentTasks && (
             <div className="notice warning">
-              {run.data.definition_pending
+              {definitionStatus === "pending"
                 ? "当前 DAG 定义仍在解析，匹配状态稍后会自动更新。"
-                : run.data.definition_matches === false
-                  ? "此运行的定义与当前 DAG 不同。依赖图展示当前定义，历史任务请参考下方列表。"
-                  : "无法确认此运行与当前 DAG 定义是否一致；依赖图展示当前定义。"}
+                : definitionStatus === "different"
+                  ? "此运行的定义与当前 DAG 不同。下方列表保留该次运行的任务状态。"
+                  : "无法确认此运行与当前 DAG 定义是否一致。下方列表保留该次运行的任务状态。"}
             </div>
           )}
           <section className="card graph-card">
             <div className="section-heading">
               <div>
                 <h2>任务依赖</h2>
-                <p>点击任务，查看上下游、执行状态和日志。</p>
+                <p>{useCurrentTasks ? "点击任务，查看上下游、执行状态和日志。" :
+                  historicalTasks.length > 0 ? "在下方列表选择该次运行的任务。" : "该次运行暂无可查看的任务记录。"}</p>
               </div>
               <span className="graph-hint">当前 DAG 定义</span>
             </div>
             <Graph
               tasks={dag.tasks}
               states={states}
-              selected={taskId}
-              onSelect={(id) => {
+              selected={useCurrentTasks ? taskId : null}
+              onSelect={useCurrentTasks ? (id) => {
                 setTaskId(id);
                 setAttempt("");
-              }}
+              } : null}
             />
-            {extraTasks.length > 0 && (
+            {historicalTasks.length > 0 && (
               <div className="historical-tasks">
-                <strong>仅在历史运行中存在</strong>
-                {extraTasks.map((id) => (
+                <strong>{useCurrentTasks ? "仅在历史运行中存在" : "该次运行的任务"}</strong>
+                {historicalTasks.map((id) => (
                   <button
                     key={id}
                     className="link-button"
+                    aria-pressed={id === taskId}
                     onClick={() => {
                       setTaskId(id);
                       setAttempt("");
@@ -308,9 +314,9 @@ export default function DagDetail({ dagId, refreshOverview, isAdmin, tab: reques
             <section className="card task-selector-card" aria-label="选择日志任务">
               <label>任务
                 <select aria-label="选择日志任务" value={taskId} onChange={(event) => { setTaskId(event.target.value); setAttempt(""); }}>
-                  {dag.tasks.length || extraTasks.length ? <>
-                    {dag.tasks.map((task) => <option key={task.task_id} value={task.task_id}>{task.task_id}</option>)}
-                    {extraTasks.map((id) => <option key={id} value={id}>{id}（仅历史记录）</option>)}
+                  {(useCurrentTasks && dag.tasks.length) || historicalTasks.length ? <>
+                    {useCurrentTasks && dag.tasks.map((task) => <option key={task.task_id} value={task.task_id}>{task.task_id}</option>)}
+                    {historicalTasks.map((id) => <option key={id} value={id}>{id}{useCurrentTasks ? "（仅历史记录）" : ""}</option>)}
                   </> : <option value="">暂无任务</option>}
                 </select>
               </label>

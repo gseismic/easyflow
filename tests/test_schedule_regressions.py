@@ -17,6 +17,37 @@ from easyflow.sdk import DAG
 UTC = timezone.utc
 
 
+@pytest.mark.parametrize(("day", "expected"), [
+    (date(2009, 10, 31), ["2009-10-31T00:00:00-03:00", "2009-10-31T00:30:00-03:00",
+                          "2009-10-31T23:00:00-03:00", "2009-10-31T23:30:00-03:00",
+                          "2009-10-31T23:30:00-04:00"]),
+    (date(2009, 11, 1), ["2009-11-01T00:00:00-03:00", "2009-11-01T00:00:00-04:00",
+                         "2009-11-01T00:30:00-04:00", "2009-11-01T23:00:00-04:00",
+                         "2009-11-01T23:30:00-04:00"]),
+])
+def test_backfill_date_excludes_neighboring_day_during_midnight_rollback(day, expected):
+    intervals = backfill_intervals("0,30 0,23 * * *", day, day, ZoneInfo("America/Goose_Bay"))
+    assert [interval.logical_date.isoformat() for interval in intervals] == expected
+
+
+def test_backfill_date_skipped_by_timezone_has_no_intervals():
+    day = date(2011, 12, 30)
+    assert backfill_intervals("@daily", day, day, ZoneInfo("Pacific/Apia")) == []
+
+
+def test_backfill_cron_visits_all_occurrences_after_large_rollback():
+    day = date(1969, 9, 30)
+    zone = ZoneInfo("Pacific/Kwajalein")
+    hours = {0, 6, 12, 18, 23}
+    start = datetime(1969, 9, 29, tzinfo=UTC)
+    candidates = [start + timedelta(hours=hour) for hour in range(96)]
+    expected = [stamp for stamp in candidates
+                if stamp.astimezone(zone).date() == day and stamp.astimezone(zone).hour in hours]
+    intervals = backfill_intervals("0 0,6,12,18,23 * * *", day, day, zone)
+    assert len(expected) == 9
+    assert [interval.logical_date.astimezone(UTC) for interval in intervals] == expected
+
+
 def test_named_timezone_snapshot_preserves_local_cron_hour_across_dst(tmp_path):
     path = tmp_path / "zones.py"
     path.write_text(

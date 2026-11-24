@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { clearRunUrl, runDetailUrl, taskLogUrl } from "../src/runApi.js";
+import { clearRunUrl, runDefinitionStatus, runDetailUrl, taskLogUrl } from "../src/runApi.js";
 
 test("运行接口通过查询参数保留特殊 ID，路径不含 ID", () => {
   const dag = "demo";
@@ -22,4 +22,13 @@ test("运行接口通过查询参数保留特殊 ID，路径不含 ID", () => {
     }
   }
   assert.equal(new URL(taskLogUrl(dag, run, task), "http://localhost").searchParams.has("attempt"), false);
+});
+
+test("任务元数据须经最新的两个响应共同确认", () => {
+  const run = { definition_hash: "original", definition_matches: true };
+  assert.equal(runDefinitionStatus(run, { definition_hash: "new" }), "different");
+  assert.equal(runDefinitionStatus(run, { definition_hash: "original" }), "matching");
+  assert.equal(runDefinitionStatus(run, null), "unknown");
+  assert.equal(runDefinitionStatus({ ...run, definition_matches: false }, run), "different");
+  assert.equal(runDefinitionStatus({ definition_pending: true }, run), "pending");
 });

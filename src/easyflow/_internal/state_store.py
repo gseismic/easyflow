@@ -29,7 +29,7 @@ from easyflow.sdk.exceptions import (
 from easyflow.sdk.states import DagRunState, TaskInstanceState
 
 MAX_XCOM_BYTES = 1_048_576
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 
 class DagRunCapacityError(StateConflictError):
@@ -219,6 +219,18 @@ CREATE TABLE IF NOT EXISTS audit_log (
     payload_json TEXT,
     created_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS ix_audit_run_failure_time
+ON audit_log(dag_id, COALESCE(julianday(created_at), 1e100))
+WHERE action IN ('dag_definition_changed', 'dag_run_failed');
+
+CREATE INDEX IF NOT EXISTS ix_audit_run_failure_identity
+ON audit_log(dag_id, run_id, created_at)
+WHERE action IN ('dag_definition_changed', 'dag_run_failed');
+
+CREATE INDEX IF NOT EXISTS ix_audit_run_failure_cycle
+ON audit_log(dag_id, run_id, audit_id)
+WHERE action IN ('dag_definition_changed', 'tasks_clear');
 """
 
 
@@ -586,7 +598,7 @@ class SQLiteStateStore:
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT dr.run_id, ti.state
+                SELECT dr.run_id, ti.state, dr.state
                 FROM dag_run dr
                 JOIN task_instance ti
                   ON ti.dag_id = dr.dag_id AND ti.run_id = dr.run_id
@@ -607,6 +619,7 @@ class SQLiteStateStore:
             exists=True,
             run_id=row[0],
             state=TaskInstanceState(row[1]) if row[1] is not None else None,
+            run_state=DagRunState(row[2]),
         )
 
     def count_dag_runs(self, *, dag_id: str, run_type: str | None = None) -> int:
@@ -635,6 +648,13 @@ class SQLiteStateStore:
                 (dag_id,),
             ).fetchall()
         return [row[0] for row in rows]
+
+    def get_dag_definition_path(self, dag_id: str) -> Path | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT file_path FROM dag_definition WHERE dag_id = ?", (dag_id,)
+            ).fetchone()
+        return Path(row[0]) if row and row[0] else None
 
     def get_dag_run(self, dag_id: str, run_id: str) -> "DagRunRecord | None":
         with self._connect() as connection:
@@ -1589,7 +1609,7 @@ class SQLiteStateStore:
                 (dag_id, run_id),
             ).fetchone():
                 return False
-            connection.execute(
+            updated = connection.execute(
                 """
                 UPDATE dag_run
                 SET state = ?, end_date = ?
@@ -1603,7 +1623,9 @@ class SQLiteStateStore:
                     DagRunState.SUCCESS.value,
                     DagRunState.FAILED.value,
                 ),
-            )
+            ).rowcount
+            if not updated:
+                return False
             connection.execute(
                 """
                 INSERT INTO audit_log(action, dag_id, run_id, payload_json, created_at)
@@ -1656,6 +1678,22 @@ class SQLiteStateStore:
                 return plan
             if check_definition is not None:
                 check_definition()
+            # 保留本次清理即将覆盖的失败时刻，定义失配已有独立审计记录。
+            connection.execute(
+                """
+                INSERT INTO audit_log(action, dag_id, run_id, created_at)
+                SELECT 'dag_run_failed', r.dag_id, r.run_id, r.end_date
+                FROM dag_run r
+                WHERE r.dag_id = ? AND r.run_id = ? AND r.state = 'failed'
+                  AND r.end_date IS NOT NULL AND NOT EXISTS (
+                    SELECT 1 FROM audit_log e
+                    WHERE e.dag_id = r.dag_id AND e.run_id = r.run_id
+                      AND e.created_at = r.end_date
+                      AND e.action IN ('dag_definition_changed', 'dag_run_failed')
+                  )
+                """,
+                (dag_id, run_id),
+            )
             now = _utc_now()
             payload = {"actor": actor, "reason": reason, "task_ids": to_clear}
             placeholders = ",".join("?" for _ in to_clear)
@@ -1909,6 +1947,7 @@ class PreviousTaskRecord:
     exists: bool
     run_id: str | None
     state: TaskInstanceState | None
+    run_state: DagRunState | None = None
 
 
 @dataclass(frozen=True)

@@ -5,7 +5,7 @@ import RunMetadata from "../components/RunMetadata";
 import Status from "../components/Status";
 import TaskDetails from "../components/TaskDetails";
 import TaskLog from "../components/TaskLog";
-import { runDetailUrl, taskLogUrl } from "../runApi";
+import { runDefinitionStatus, runDetailUrl, taskLogUrl } from "../runApi";
 
 export default function HistoryRun({ dagId, runId, requestedTaskId, requestedAttempt, backHref, backLabel = "返回运行历史", onWorkflowMetadata }) {
   const [taskId, setTaskId] = useState("");
@@ -29,10 +29,8 @@ export default function HistoryRun({ dagId, runId, requestedTaskId, requestedAtt
       setAttempt(target === requestedTaskId ? requestedAttempt || "" : "");
     }
   }, [taskId, run.data, requestedTaskId, requestedAttempt]);
-  const differentDefinition = Boolean(dag.data?.definition_hash && run.data?.definition_hash &&
-    dag.data.definition_hash !== run.data.definition_hash);
-  const matchesDefinition = run.data?.definition_matches === true && !dag.error &&
-    Boolean(run.data.definition_hash) && run.data.definition_hash === dag.data?.definition_hash;
+  const definitionStatus = runDefinitionStatus(run.data, dag.error ? null : dag.data);
+  const matchesDefinition = definitionStatus === "matching";
   const selectedTask =
     (matchesDefinition && dag.data.tasks?.find((item) => item.task_id === taskId)) ||
     (taskId ? { task_id: taskId } : null);
@@ -78,11 +76,11 @@ export default function HistoryRun({ dagId, runId, requestedTaskId, requestedAtt
           </section>
           {!matchesDefinition && (
             <div className="notice warning">
-              {run.data.definition_pending
+              {definitionStatus === "pending"
                 ? "当前 DAG 定义仍在解析，匹配状态稍后会自动更新。"
                 : dag.error && run.data.definition_matches === true
                   ? "当前工作流信息加载失败；下面显示已保存的任务状态和日志。"
-                  : run.data.definition_matches === false || differentDefinition
+                  : definitionStatus === "different"
                     ? "工作流定义已变化；历史上下游无法确认，下面显示已保存的任务状态和日志。"
                     : "无法确认历史工作流定义；下面显示已保存的任务状态和日志。"}
             </div>

@@ -18,7 +18,7 @@ _IMPORT_LOCK = threading.RLock()
 
 class LocalSourceFinder:
     def __init__(self, dag_path: Path) -> None:
-        self.dependency_hashes: dict[str, str] = {}
+        self.dependencies: dict[str, tuple[str, str]] = {}
         self.roots = {dag_path.parent.resolve(), Path.cwd().resolve()}
         for parent in dag_path.parents:
             if (parent / "pyproject.toml").is_file() or (parent / ".git").exists():
@@ -30,39 +30,46 @@ class LocalSourceFinder:
             for name in ("stdlib", "platstdlib", "purelib", "platlib")
         )
 
-    def is_local(self, path: Path) -> bool:
+    def is_local(self, path: Path, target: Path) -> bool:
         return (
             path.suffix == ".py"
-            and any(path.is_relative_to(root) for root in self.roots)
-            and not any(path.is_relative_to(root) for root in self.excluded)
+            and any(
+                path.is_relative_to(root) or target.is_relative_to(root)
+                for root in self.roots
+            )
+            and not any(
+                path.is_relative_to(root) or target.is_relative_to(root)
+                for root in self.excluded
+            )
         )
 
     def find_spec(self, fullname, path=None, target=None):
         spec = PathFinder.find_spec(fullname, path, target)
-        if (
-            spec is not None
-            and isinstance(spec.loader, SourceFileLoader)
-            and self.is_local(Path(spec.loader.path).resolve())
-        ):
-            spec.loader = _LocalSourceLoader(
-                fullname, spec.loader.path, self.dependency_hashes
-            )
-            return spec
+        if spec is not None and isinstance(spec.loader, SourceFileLoader):
+            origin = Path(spec.loader.path).absolute()
+            resolved = origin.resolve()
+            if self.is_local(origin, resolved):
+                spec.loader = _LocalSourceLoader(fullname, origin, resolved, self)
+                return spec
         return None
 
 
 class _LocalSourceLoader(SourceFileLoader):
     def __init__(
-        self, fullname: str, path: str, dependency_hashes: dict[str, str]
+        self, fullname: str, origin: Path, target: Path, finder: LocalSourceFinder
     ) -> None:
-        super().__init__(fullname, path)
-        self.dependency_hashes = dependency_hashes
+        super().__init__(fullname, str(origin))
+        self.target = str(target)
+        self.finder = finder
 
     def exec_module(self, module: ModuleType) -> None:
-        source = self.get_data(self.path)
+        # 按已解析目标读取，导入路径在读取期间切换时仍能精确核对本次加载。
+        source = self.get_data(self.target)
         digest = hashlib.sha256(source).hexdigest()
+        dependency = (self.target, digest)
+        if self.finder.dependencies.setdefault(self.path, dependency) != dependency:
+            raise ValueError(f"解析期间本地依赖已改变：{self.path}")
         module.__easyflow_source_sha256__ = digest
-        self.dependency_hashes[str(Path(self.path).resolve())] = digest
         exec(self.source_to_code(source, self.path), module.__dict__)
 
 
@@ -89,7 +96,8 @@ def local_source_imports(dag_path: Path) -> Iterator[LocalSourceFinder]:
             loader = getattr(module, "__loader__", None)
             if not isinstance(loader, SourceFileLoader):
                 continue
-            if not finder.is_local(Path(loader.path).resolve()):
+            origin = Path(loader.path).absolute()
+            if not finder.is_local(origin, origin.resolve()):
                 continue
             evicted[name] = (module, _detach_module(name, module))
         previous = set(sys.modules)
@@ -108,7 +116,7 @@ def local_source_imports(dag_path: Path) -> Iterator[LocalSourceFinder]:
                 loader = getattr(module, "__loader__", None)
                 scoped_source = (
                     isinstance(loader, _LocalSourceLoader)
-                    and loader.dependency_hashes is finder.dependency_hashes
+                    and loader.finder is finder
                 )
                 scoped_namespace = isinstance(loader, NamespaceLoader) and any(
                     Path(item).is_relative_to(directory) for item in module.__path__

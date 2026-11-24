@@ -10,7 +10,7 @@ from collections.abc import Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime, timezone
 from pathlib import Path
 
 from easyflow._internal.dag_parser import (
@@ -28,7 +28,7 @@ from easyflow._internal.persistent_runner import (
 from easyflow._internal.schedules import (
     MAX_CATCHUP_PER_SCAN,
     backfill_intervals,
-    backfill_logical_date_bounds,
+    backfill_logical_date_ranges,
     dag_timezone,
     iter_backfill_intervals,
     scheduler_intervals,
@@ -65,7 +65,14 @@ class BackfillSummary:
     runs: list[ScheduledRunSummary]
     complete: bool = True
     pending: tuple[datetime, ...] = ()
-    pending_range: tuple[datetime, datetime] | None = None
+    pending_ranges: tuple[tuple[datetime, datetime], ...] = ()
+    interruption: str | None = None
+
+    @property
+    def pending_range(self) -> tuple[datetime, datetime] | None:
+        if not self.pending_ranges:
+            return None
+        return self.pending_ranges[0][0], self.pending_ranges[-1][1]
 
 
 @dataclass(frozen=True)
@@ -243,7 +250,7 @@ def _run_sources_with_lease(
     )
     summaries: list[ScheduledRunSummary] = []
     issues: list[SchedulerIssue] = []
-    with ThreadPoolExecutor(max_workers=64, thread_name_prefix="easyflow-dag") as pool:
+    with _run_pool(stopped, max_workers=64, thread_name_prefix="easyflow-dag") as pool:
         futures = {
             pool.submit(
                 _run_scheduler_source_once,
@@ -260,13 +267,25 @@ def _run_sources_with_lease(
             try:
                 summaries.extend(future.result())
             except SchedulerLeaseLost:
-                stopped.set()
                 raise
             except Exception as exc:  # noqa: BLE001 - 单个 DAG 调度失败不阻断其他 DAG。
                 issues.append(SchedulerIssue(source.dag_id, source.file_path, str(exc)))
     if heartbeat.lost.is_set():
         raise SchedulerLeaseLost("scheduler lease 已丢失，停止调度。")
     return sorted(summaries, key=lambda item: (item.dag_id, item.run_id)), issues
+
+
+@contextmanager
+def _run_pool(
+    stopped: threading.Event, *, max_workers: int, thread_name_prefix: str
+) -> Iterator[ThreadPoolExecutor]:
+    pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix=thread_name_prefix)
+    try:
+        yield pool
+    finally:
+        # worker 有独立进程组，先通知执行器停止，再等待调度线程退出。
+        stopped.set()
+        pool.shutdown(wait=True, cancel_futures=True)
 
 
 class SchedulerCoordinator:
@@ -525,7 +544,7 @@ def create_backfill(
     dag = load_dag_snapshot(file_path, dag_id)
     if max_active_runs is not None and max_active_runs < 1:
         raise ValueError("max_active_runs 必须大于 0。")
-    bounds = backfill_logical_date_bounds(
+    ranges = backfill_logical_date_ranges(
         dag.schedule,
         start_date,
         end_date,
@@ -535,26 +554,31 @@ def create_backfill(
         end_bound=dag.end_date,
     )
     backfill_id = backfill_id or f"backfill__{uuid.uuid4().hex}"
-    if bounds is None:
+    if not ranges:
         return BackfillSummary(backfill_id=backfill_id, runs=[])
-    first, last = bounds
     store.create_backfill(
         backfill_id=backfill_id,
         dag_id=dag.dag_id,
-        start_logical_date=first,
-        end_logical_date=last,
+        start_logical_date=ranges[0][0],
+        end_logical_date=ranges[-1][1],
         reprocessing_behavior=reprocessing_behavior,
         max_active_runs=max_active_runs,
     )
-    runner = PersistentDagRunner(store, log_root=log_root)
+    stopped = threading.Event()
+    runner = PersistentDagRunner(store, log_root=log_root, should_continue=lambda: not stopped.is_set())
     summaries: list[ScheduledRunSummary] = []
-    intervals = iter_backfill_intervals(dag.schedule, first, last)
+    intervals = (
+        interval
+        for first, last in ranges
+        for interval in iter_backfill_intervals(dag.schedule, first, last)
+    )
     current = next(intervals, None)
     batch_size = max_active_runs or 1
-    with ThreadPoolExecutor(max_workers=batch_size) as pool:
+    with _run_pool(stopped, max_workers=batch_size, thread_name_prefix="easyflow-backfill") as pool:
         while current is not None:
             batch = []
             capacity_full = False
+            interruption = None
             for _ in range(batch_size):
                 if current is None:
                     break
@@ -574,6 +598,9 @@ def create_backfill(
                 except DagRunCapacityError:
                     capacity_full = True
                     break
+                except DagSourceChanged as exc:
+                    interruption = str(exc)
+                    break
                 future = pool.submit(
                     runner.run_existing,
                     dag,
@@ -588,7 +615,9 @@ def create_backfill(
             batch_results = [(interval, future.result()) for interval, future in batch]
             pending = []
             for interval, result in batch_results:
-                if result.state in {DagRunState.QUEUED, DagRunState.RUNNING}:
+                if interruption is None and result.state in {
+                    DagRunState.QUEUED, DagRunState.RUNNING
+                }:
                     result = runner.run_existing(
                         dag,
                         run_id=result.run_id,
@@ -604,18 +633,26 @@ def create_backfill(
                 if result.state in {DagRunState.QUEUED, DagRunState.RUNNING}:
                     pending.append(interval.logical_date)
             if (
-                capacity_full
+                interruption is not None
+                or capacity_full
                 or pending
                 or (current is not None and store.is_dag_paused(dag_id))
             ):
+                remaining = ()
+                if current is not None:
+                    next_at = current.logical_date.astimezone(UTC)
+                    remaining = tuple(
+                        (first if first.astimezone(UTC) > next_at else current.logical_date, last)
+                        for first, last in ranges
+                        if last.astimezone(UTC) >= next_at
+                    )
                 return BackfillSummary(
                     backfill_id,
                     summaries,
                     complete=False,
                     pending=tuple(pending),
-                    pending_range=(current.logical_date, last)
-                    if current is not None
-                    else None,
+                    pending_ranges=remaining,
+                    interruption=interruption,
                 )
     return BackfillSummary(backfill_id=backfill_id, runs=summaries)
 

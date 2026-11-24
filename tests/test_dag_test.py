@@ -2,14 +2,17 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timezone
 import json
+import sys
 
 import pytest
 
 from easyflow._internal.persistent_runner import PersistentDagRunner
 from easyflow._internal.state_store import SQLiteStateStore
+from easyflow.cli import main
 from easyflow.sdk import (
     DAG,
     ContextNotAvailableError,
+    DagDefinitionError,
     DuplicateTaskIdError,
     TemplateRenderError,
     TriggerRule,
@@ -49,6 +52,62 @@ def test_python_operators_reject_async_callables_and_results(tmp_path):
     result = runner.run_existing(dag, run_id=run_id)
     assert result.task_states["work"] == TaskInstanceState.FAILED
     assert "不能返回异步结果" in runner._log_path(dag.dag_id, run_id, "work", 1).read_text()
+
+
+def test_dag_factory_rejects_async_functions_and_return_values():
+    async def build():
+        EmptyOperator(task_id="work")
+
+    with pytest.raises(DagDefinitionError, match="仅支持同步工厂"):
+        dag(build)
+    with pytest.raises(DagDefinitionError, match="不能返回异步结果"):
+        dag(dag_id="wrapped")(lambda: build())()
+
+
+def test_system_exit_is_retried_as_a_task_failure():
+    calls = []
+    with DAG("retry_exit") as workflow:
+        @task(retries=1)
+        def first():
+            calls.append("first")
+            if len(calls) == 1:
+                sys.exit(0)
+            return "完成"
+
+        @task
+        def second(value):
+            calls.append("second")
+            return value
+
+        second(first())
+
+    result = workflow.test()
+    assert result.success and result.try_numbers["first"] == 2
+    assert result.task_results["second"] == "完成"
+    assert calls == ["first", "first", "second"]
+
+
+def test_cli_dag_test_reports_exhausted_system_exit(tmp_path, capsys):
+    path = tmp_path / "exit_zero.py"
+    path.write_text(
+        """from sys import exit
+from easyflow.sdk import DAG, task
+with DAG('exit_zero') as dag:
+    @task(retries=1)
+    def first():
+        print('执行 first')
+        exit(0)
+    @task
+    def second(value):
+        print('执行 second')
+    second(first())
+""",
+        encoding="utf-8",
+    )
+    assert main(["dags", "test", "exit_zero", "--file", str(path)]) == 1
+    output = capsys.readouterr().out
+    assert output.count("执行 first") == 2 and "执行 second" not in output
+    assert output.splitlines()[-1].endswith(" failed")
 
 
 def test_taskflow_resolves_xcom_and_auto_dependency() -> None:

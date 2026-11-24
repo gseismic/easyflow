@@ -103,3 +103,9 @@
 - 更新者为 Codex，已知模型系列为 GPT-6，环境未提供精确模型 ID。状态保持未解决。
 - 以 `c900362e04944fd8c0a483c8958f1899aae795d1` 和本次 `WORKTREE` 为对照。用同一 Ruff 0.17.4 扫描 `src tests examples`，按相对路径、规则和消息计数，两者各 192 项，新增及减少均为 0。
 - 显式选择 `E4,E7,E9,F` 的检查通过。相关代码路径和其他验证结果见[全量 Review 修复与复审结果](../plans/PLAN-20261124-001-model-unknown-review-fix-loop-OUTCOME.md)。
+
+## 2026-11-25 01:03 Asia/Shanghai 全量 Review 修复后的基线复核
+
+- 更新者为 Codex，已知模型系列为 GPT-6，环境未提供完整模型 ID。状态保持未解决。
+- 对比基准为 `a10a1a35b883d65208caaaf5aca5c64f1a1c0bda`。验收时为 `WORKTREE`，范围为 `src`、`tests` 和 `examples`。Ruff 0.17.4 诊断从 192 项变为 191 项，按相对文件、规则和消息对比新增 0 项，减少 `src/easyflow/_internal/cron.py` 的一项 `SIM102`。
+- `E4,E7,E9,F` 核心规则通过，默认全量检查仍受到既有诊断影响。[全量 Review 修复与复审结果](../plans/PLAN-20261125-001-model-unknown-review-fix-loop-OUTCOME.md)

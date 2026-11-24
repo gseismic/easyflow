@@ -206,7 +206,7 @@ class PersistentDagRunner:
             definition_hash=definition_hash_for_dag(
                 dag, file_path, source_sha256=loaded_source
             ),
-            file_path=str(file_path) if file_path is not None else None,
+            file_path=str(Path(file_path).absolute()) if file_path is not None else None,
             conf=conf or {},
             backfill_id=backfill_id,
             max_active_runs=max_active_runs,
@@ -505,7 +505,7 @@ class PersistentDagRunner:
         if previous.state in {
             TaskInstanceState.FAILED,
             TaskInstanceState.UPSTREAM_FAILED,
-        }:
+        } or previous.run_state in {DagRunState.SUCCESS, DagRunState.FAILED}:
             return "upstream_failed"
         return "wait"
 
@@ -535,7 +535,7 @@ class PersistentDagRunner:
                     time.sleep(min(remaining, 0.2))
                     continue
             try:
-                if not self.store.queue_task(
+                if current_state != TaskInstanceState.QUEUED and not self.store.queue_task(
                     dag.dag_id,
                     run_id,
                     task.task_id,

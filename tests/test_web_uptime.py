@@ -7,7 +7,11 @@ from zoneinfo import ZoneInfo
 import pytest
 from fastapi.testclient import TestClient
 
+from easyflow._internal import state_store
+from easyflow._internal.persistent_runner import PersistentDagRunner
 from easyflow._internal.state_store import SQLiteStateStore
+from easyflow.operators import EmptyOperator
+from easyflow.sdk import DAG
 from easyflow.web import uptime
 from easyflow.web.app import create_app
 from easyflow.web.uptime import workflow_failures, workflow_uptime
@@ -77,6 +81,109 @@ def test_running_dag_without_a_started_task_is_waiting(tmp_path):
     assert waiting["run_count"] == 0 and waiting["waiting_run_count"] == 1
     assert data["legacy"][-1]["state"] == "running"
     assert data["legacy"][-1]["run_count"] == 1
+
+
+@pytest.mark.parametrize("failure_kind", ["definition", "legacy_definition", "legacy_run"])
+def test_run_failure_survives_clear_and_successful_rerun(tmp_path, monkeypatch, failure_kind):
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    with DAG("demo") as dag:
+        EmptyOperator(task_id="work")
+    runner = PersistentDagRunner(store, log_root=tmp_path / "logs")
+    run_id = runner.create_manual_run(dag, file_path=None, logical_date=START)
+    record = store.get_dag_run("demo", run_id)
+    failed_at = (START + timedelta(minutes=7)).isoformat()
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("UPDATE task_instance SET state = 'skipped'")
+        if failure_kind.startswith("legacy"):
+            connection.execute("UPDATE dag_run SET state = 'failed', end_date = ?", (failed_at,))
+            if failure_kind == "legacy_definition":
+                connection.execute(
+                    "INSERT INTO audit_log(action, dag_id, run_id, created_at) "
+                    "VALUES ('dag_definition_changed', 'demo', ?, ?)",
+                    (run_id, failed_at),
+                )
+                connection.execute(
+                    "INSERT INTO audit_log(action, dag_id, run_id, created_at) "
+                    "VALUES ('dag_definition_changed', 'demo', ?, ?)",
+                    (run_id, (START + timedelta(minutes=31)).isoformat()),
+                )
+                connection.execute("DROP INDEX ix_audit_run_failure_time")
+                connection.execute("DROP INDEX ix_audit_run_failure_identity")
+                connection.execute("DROP INDEX ix_audit_run_failure_cycle")
+                connection.execute("PRAGMA user_version = 1")
+    if failure_kind == "definition":
+        with monkeypatch.context() as context:
+            context.setattr(state_store, "_utc_now", lambda: failed_at)
+            arguments = {
+                "dag_id": "demo", "run_id": run_id,
+                "expected_hash": record.definition_hash, "actual_hash": "different",
+            }
+            assert store.fail_dag_run_definition_changed(**arguments)
+            assert not store.fail_dag_run_definition_changed(**arguments)
+
+    store.init_db(repair=False)
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("SELECT COUNT(*) FROM task_try").fetchone()[0] == 0
+    window = {"start_at": START, "end_at": START + timedelta(minutes=30),
+              "now": START + timedelta(hours=1)}
+
+    def check(run_state):
+        slot = workflow_uptime(store.path, dag_ids=["demo"], **window)["workflows"]["demo"][0]
+        assert slot["state"] == "failed" and slot["failed_run_count"] == 1
+        assert slot["sample_run_id"] == run_id and slot["sample_task_id"] is None
+        failures = workflow_failures(store.path, dag_id="demo", **window)
+        assert failures["total"] == failures["failed_run_count"] == 1
+        failure = failures["items"][0]
+        assert failure["ended_at"] == failed_at and failure["run_state"] == run_state
+        assert failure["started_at"] is None and failure["task_id"] is None
+        expected_code = None if failure_kind == "legacy_run" else "DAG_DEFINITION_CHANGED"
+        assert failure["error_code"] == expected_code
+
+    check("failed")
+    assert store.clear_task_instances(dag_id="demo", run_id=run_id).to_clear == ["work"]
+    check("queued")
+    assert runner.run_existing(dag, run_id=run_id).state.value == "success"
+    check("success")
+    actions = [action for action, _, _ in store.list_audit_actions()]
+    expected = {
+        "definition": ["dag_definition_changed"],
+        "legacy_definition": ["dag_definition_changed"] * 2,
+        "legacy_run": ["dag_run_failed"],
+    }
+    assert actions == [*expected[failure_kind], "tasks_clear"]
+    next_slot = {**window, "start_at": window["end_at"], "end_at": window["now"]}
+    assert workflow_failures(store.path, dag_id="demo", **next_slot)["total"] == 0
+    assert workflow_uptime(store.path, dag_ids=["demo"], **next_slot)["workflows"]["demo"][0]["failed_run_count"] == 0
+
+
+def test_known_run_failure_stays_visible_beside_an_earlier_task_failure(tmp_path):
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    store.init_db()
+    failed_at = (START + timedelta(minutes=22)).isoformat()
+    old_try = (START + timedelta(minutes=10)).isoformat()
+    with sqlite3.connect(store.path) as connection:
+        add_run(connection, "multiple", state="failed", end=failed_at)
+        add_try(connection, "multiple", state="failed", start=None, end=old_try)
+        connection.execute(
+            "INSERT INTO audit_log(action, dag_id, run_id, created_at) "
+            "VALUES ('dag_definition_changed', 'demo', 'multiple', ?)",
+            (failed_at,),
+        )
+    window = {"dag_id": "demo", "start_at": START, "end_at": START + timedelta(minutes=30),
+              "now": START + timedelta(hours=1)}
+    failures = workflow_failures(store.path, **window)
+    assert failures["total"] == 2 and failures["failed_run_count"] == 1
+    assert [(item["task_id"], item["ended_at"]) for item in failures["items"]] == [
+        (None, failed_at), ("work", old_try),
+    ]
+
+    with sqlite3.connect(store.path) as connection:
+        add_try(connection, "multiple", state="failed", start=None, end=failed_at, attempt=2)
+        connection.execute("UPDATE task_try SET error_code = 'DAG_DEFINITION_CHANGED' WHERE try_number = 2")
+    failures = workflow_failures(store.path, **window)
+    assert failures["total"] == 2
+    assert [item["try_number"] for item in failures["items"]] == [2, 1]
 
 
 def test_failure_details_preserve_recovered_attempts_and_paginate_all_failures(
@@ -767,7 +874,7 @@ def test_uptime_excludes_finished_history_before_python_time_conversion(tmp_path
 
     class RangeConnection(sqlite3.Connection):
         def execute(self, sql, parameters=()):
-            if "WITH intervals" in sql or "WITH errors" in sql:
+            if "WITH intervals" in sql or "bucketed AS" in sql:
                 plans.extend(
                     row[3] for row in super().execute("EXPLAIN QUERY PLAN " + sql, parameters)
                 )
@@ -789,7 +896,7 @@ def test_uptime_excludes_finished_history_before_python_time_conversion(tmp_path
     assert slots[1]["run_count"] == 0
     assert old_end not in converted
     assert "SCAN t" not in plans and "SCAN r" not in plans
-    for index in ["ix_task_try_uptime_end", "ix_dag_run_uptime_end"]:
+    for index in ["ix_task_try_uptime_end", "ix_dag_run_uptime_end", "ix_audit_run_failure_time"]:
         assert any(index in detail and "<expr>>?" in detail for detail in plans)
     converted.clear()
     failures = workflow_failures(store.path, dag_id="demo", **params)

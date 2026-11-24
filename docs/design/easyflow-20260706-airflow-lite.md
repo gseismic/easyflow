@@ -997,6 +997,7 @@ Branch TaskFlow、`LatestOnlyOperator` 放入后续版本，但 v0.1 状态机�
 - 如果不存在上一个实例，当前 TaskInstance 允许继续调度；
 - 上一个实例为 `success` 或 `skipped` 时，依赖满足；
 - 上一个实例为 `failed` 或 `upstream_failed` 时，当前 TaskInstance 进入 `upstream_failed`；
+- 上一个 DagRun 已终止且对应任务仍为非终态时，该任务已经无法继续执行，当前 TaskInstance 进入 `upstream_failed`；
 - 上一个实例仍为非终态时，当前 TaskInstance 保持 `None`，并记录等待原因 `WAITING_DEPENDS_ON_PAST`；
 - backfill 默认按 logical date 正序创建和调度，除非未来显式设计 `--run-backwards`，否则不提供逆序执行。
 

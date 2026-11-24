@@ -11,11 +11,15 @@ from typing import Annotated
 import typer
 
 from easyflow._internal.dag_parser import (
+    CLEAR_DEFINITION_MISMATCH,
     AsyncDagDiscovery,
     DagParseIssue,
     DagSource,
+    DagSourceChanged,
+    definition_matches,
     discover_dag_sources,
     inspect_dags_from_file,
+    load_dag_snapshot,
     open_dag_from_file,
     refresh_dag_source,
 )
@@ -311,7 +315,31 @@ def tasks_clear(
 ) -> None:
     """预览或清理任务实例。"""
     store = SQLiteStateStore(database_url)
+    record = store.get_dag_run(dag_id, run_id)
+    if record is None:
+        _error(f"DagRun 不存在: {dag_id}/{run_id}")
+    path = store.get_dag_definition_path(dag_id)
+    if path is None or record.definition_hash is None:
+        _error(CLEAR_DEFINITION_MISMATCH)
+
     try:
+        resolved = path.resolve()
+        source = DagSource(dag_id, resolved, load_dag_snapshot(resolved, dag_id))
+    except (OSError, RuntimeError, ValueError) as exc:
+        _error(f"{CLEAR_DEFINITION_MISMATCH} {exc}")
+
+    def check_definition() -> None:
+        try:
+            path_matches = path.resolve() == source.file_path
+        except (OSError, RuntimeError) as exc:
+            raise DagSourceChanged(CLEAR_DEFINITION_MISMATCH) from exc
+        if not path_matches or store.get_dag_definition_path(dag_id) != path:
+            raise DagSourceChanged(CLEAR_DEFINITION_MISMATCH)
+        if not definition_matches(source, record.definition_hash):
+            raise DagSourceChanged(CLEAR_DEFINITION_MISMATCH)
+
+    try:
+        check_definition()
         preview = store.preview_clear_task_instances(
             dag_id=dag_id, run_id=run_id, task_ids=task_id
         )
@@ -326,9 +354,17 @@ def tasks_clear(
         raise typer.Exit(1)
     if not yes:
         _error("缺少 --yes，未执行 clear。", 2)
-    result = store.clear_task_instances(
-        dag_id=dag_id, run_id=run_id, task_ids=task_id, actor="cli", reason=reason
-    )
+    try:
+        result = store.clear_task_instances(
+            dag_id=dag_id,
+            run_id=run_id,
+            task_ids=task_id,
+            actor="cli",
+            reason=reason,
+            check_definition=check_definition,
+        )
+    except ValueError as exc:
+        _error(str(exc))
     _print_clear_result(result)
     if result.blocked:
         raise typer.Exit(1)
@@ -492,13 +528,14 @@ def backfill_create(
     for run in summary.runs:
         typer.echo(f"{dag_id} {run.run_id} {run.state.value}")
     if not summary.complete:
+        if summary.interruption is not None:
+            typer.echo(summary.interruption, err=True)
         typer.echo(
             f"backfill 未完成，已创建但未完成 {len(summary.pending)} 个区间。"
             "已有运行可由 scheduler 继续。",
             err=True,
         )
-        if summary.pending_range is not None:
-            first, last = summary.pending_range
+        for first, last in summary.pending_ranges:
             typer.echo(
                 f"尚未检查的逻辑日期为 {first.isoformat()} 至 {last.isoformat()}。",
                 err=True,

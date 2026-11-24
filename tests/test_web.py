@@ -110,6 +110,43 @@ def test_web_trigger_uses_refreshed_local_dependency(review_workflow):
     assert service.store.pull_xcom("demo", run_id, "second", "return_value") == "v2"
 
 
+def test_symlink_target_switch_invalidates_cached_trigger_and_clear(review_workflow, monkeypatch):
+    service, client, runner, path, helper = review_workflow
+    releases = helper.parent.parent / "releases"
+    releases.mkdir()
+    old_target, new_target = releases / "version_1.py", releases / "version_2.py"
+    helper.rename(old_target)
+    new_target.write_text("VALUE = 'v2'\n", encoding="utf-8")
+    helper.symlink_to(old_target)
+    cached = service.source("demo")
+    run_id = runner.create_manual_run(cached.dag, file_path=path, logical_date=datetime.now(UTC))
+    assert runner.run_existing(cached.dag, run_id=run_id, file_path=path).state.value == "success"
+    params = {"dag_id": "demo", "run_id": run_id}
+    body = {"task_ids": ["first"]}
+    assert client.post("/api/runs/clear-preview", params=params, json=body).status_code == 200
+
+    new_link = helper.with_suffix(".link")
+    new_link.symlink_to(new_target)
+    clear = service.store.clear_task_instances
+
+    def retarget_before_mutation(**kwargs):
+        new_link.replace(helper)
+        return clear(**kwargs)
+
+    with monkeypatch.context() as context:
+        context.setattr(service.store, "clear_task_instances", retarget_before_mutation)
+        assert client.post("/api/runs/clear", params=params, json=body).status_code == 409
+    assert old_target.read_text(encoding="utf-8") == "VALUE = 'v1'\n"
+    assert service.store.pull_xcom("demo", run_id, "first", "return_value") == "v1"
+    assert client.post("/api/runs/clear-preview", params=params, json=body).status_code == 409
+
+    response = client.post("/api/workflows/trigger", params={"dag_id": "demo"}, json={})
+    assert response.status_code == 200, response.text
+    new_run_id = response.json()["run_id"]
+    assert runner.run_existing(service.source("demo").dag, run_id=new_run_id, file_path=path).state.value == "success"
+    assert service.store.pull_xcom("demo", new_run_id, "second", "return_value") == "v2"
+
+
 def test_definition_failed_run_can_clear_a_successful_task_with_stale_queue(review_workflow):
     service, client, runner, path, helper = review_workflow
     store = service.store

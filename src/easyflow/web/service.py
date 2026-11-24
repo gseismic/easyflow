@@ -13,12 +13,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from easyflow._internal.dag_parser import (
+    CLEAR_DEFINITION_MISMATCH,
     AsyncDagDiscovery,
     DagDiscoveryResult,
     DagSource,
     DagSourceChanged,
-    dag_source_is_current,
-    definition_hash_for_dag,
+    definition_matches,
+    loaded_definition_hash,
 )
 from easyflow._internal.persistent_runner import PersistentDagRunner
 from easyflow._internal.cron import cron_next_at_or_after
@@ -164,22 +165,6 @@ def _parse_history_cursor(cursor: str) -> tuple[str, str, str]:
 
 class DagDiscoveryPending(RuntimeError):
     pass
-
-
-def _parsed_definition_hash(source: DagSource) -> str:
-    return definition_hash_for_dag(
-        source.dag,
-        source.file_path,
-        source_sha256=getattr(source.dag, "_easyflow_source_sha256", None),
-    )
-
-
-def _definition_matches(source: DagSource, expected: str | None) -> bool:
-    return (
-        expected is not None
-        and expected == _parsed_definition_hash(source)
-        and dag_source_is_current(source.dag, source.file_path)
-    )
 
 
 class WebService:
@@ -726,7 +711,7 @@ class WebService:
     def detail(self, dag_id: str) -> dict:
         source = self.source(dag_id)
         result = self.dag_info(source)
-        result["definition_hash"] = _parsed_definition_hash(source)
+        result["definition_hash"] = loaded_definition_hash(source)
         result["tasks"] = [
             {
                 "task_id": task.task_id,
@@ -778,7 +763,7 @@ class WebService:
         result["definition_matches"] = None
         if result["definition_hash"]:
             try:
-                result["definition_matches"] = _definition_matches(
+                result["definition_matches"] = definition_matches(
                     self.source(dag_id), result["definition_hash"]
                 )
             except DagDiscoveryPending:
@@ -790,13 +775,12 @@ class WebService:
     def check_clear_definition(
         self, record: DagRunRecord, *, source: DagSource | None = None
     ) -> DagSource:
-        message = "当前 DAG 定义无法与该运行确认匹配，不能清理后重跑。"
         try:
             source = source or self.source(record.dag_id)
         except (LookupError, OSError, ValueError) as exc:
-            raise DagSourceChanged(message) from exc
-        if not _definition_matches(source, record.definition_hash):
-            raise DagSourceChanged(message)
+            raise DagSourceChanged(CLEAR_DEFINITION_MISMATCH) from exc
+        if not definition_matches(source, record.definition_hash):
+            raise DagSourceChanged(CLEAR_DEFINITION_MISMATCH)
         return source
 
     def source_code(self, dag_id: str, run_id: str | None) -> dict:
@@ -818,7 +802,7 @@ class WebService:
             if record is None:
                 raise LookupError("运行不存在。")
             if record.definition_hash and parsed_matches:
-                run_matches = _definition_matches(source, record.definition_hash)
+                run_matches = definition_matches(source, record.definition_hash)
         return {
             "path": str(path.relative_to(self.dags_folder)),
             "content": raw.decode("utf-8", errors="replace"),

@@ -75,3 +75,5 @@
 - 2026-11-22 16:49 Asia/Shanghai：[全量代码 Review 修复结果](PLAN-20261122-001-model-unknown-all-code-review-fixes-OUTCOME.md)，已完成（WORKTREE），21 项均已复验。319 项后端、38 项前端、浏览器、构建资源保留与分发包检查通过。
 - 2026-11-24 18:27 Asia/Shanghai，新增[全量 Review 修复与复审计划](PLAN-20261124-001-model-unknown-review-fix-loop.md)，进行中，覆盖 R01–R18。
 - 2026-11-24 18:59 Asia/Shanghai，[全量 Review 修复与复审结果](PLAN-20261124-001-model-unknown-review-fix-loop-OUTCOME.md)，已完成（WORKTREE）。18 项均已复验，342 项后端、38 项前端、构建、浏览器与打包验证通过。
+- 2026-11-25 00:17 Asia/Shanghai，[全量 Review 修复与复审计划](PLAN-20261125-001-model-unknown-review-fix-loop.md)，进行中，覆盖 R01–R14。
+- 2026-11-25 01:03 Asia/Shanghai，[全量 Review 修复与复审结果](PLAN-20261125-001-model-unknown-review-fix-loop-OUTCOME.md)，已完成。14 项均已复验，376 项后端、39 项前端、构建、浏览器和打包验证通过。

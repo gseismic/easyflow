@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import re
 from collections import deque
 from collections.abc import Collection
@@ -243,10 +244,20 @@ def dag(
     **dag_kwargs: Any,
 ) -> Callable[..., DAG] | DAG:
     def decorate(func: Callable[..., Any]) -> Callable[..., DAG]:
+        if any(
+            inspect.iscoroutinefunction(callback) or inspect.isasyncgenfunction(callback)
+            for callback in (func, type(func).__call__)
+        ):
+            raise DagDefinitionError("@dag 仅支持同步工厂。")
+
         def factory(*args: Any, **kwargs: Any) -> DAG:
             built = DAG(dag_id or func.__name__, **dag_kwargs)
             with built:
-                func(*args, **kwargs)
+                result = func(*args, **kwargs)
+                if inspect.isawaitable(result) or inspect.isasyncgen(result):
+                    if inspect.iscoroutine(result):
+                        result.close()
+                    raise DagDefinitionError("@dag 工厂不能返回异步结果。")
             return built
 
         factory.__name__ = func.__name__

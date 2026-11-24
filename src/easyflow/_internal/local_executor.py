@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import multiprocessing
+import os
+import signal
 import time
 import uuid
 from collections.abc import Iterable
@@ -37,6 +39,11 @@ class _WorkerOutcome(IntEnum):
     STARTUP_TIMEOUT = 3
 
 
+class _WorkerReadiness(IntEnum):
+    SESSION_CREATED = 1
+    DEFINITION_LOADED = 2
+
+
 @dataclass
 class _Worker:
     process: multiprocessing.Process
@@ -46,24 +53,46 @@ class _Worker:
     previous_try_number: int
 
 
-def _stop_workers(
-    processes: Iterable[multiprocessing.Process], *, force: bool = False
-) -> None:
-    workers = list(processes)
+def _signal_worker_group(worker: _Worker, sig: int) -> bool:
+    if os.name != "posix" or not worker.ready.value:
+        return False
+    try:
+        os.killpg(worker.process.pid, sig)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # macOS 回收最后一个进程时可能返回 EPERM，仍存活的 worker 必须报告错误。
+        if worker.process.is_alive():
+            raise
+        return False
+    return True
+
+
+def _stop_workers(workers: Iterable[_Worker], *, force: bool = False) -> None:
+    workers = list(workers)
     if not force:
-        for process in workers:
-            if process.is_alive():
-                process.terminate()
+        for worker in workers:
+            signaled = _signal_worker_group(worker, signal.SIGTERM)
+            if not signaled and worker.process.is_alive():
+                worker.process.terminate()
         grace_end = time.monotonic() + 0.2
-        for process in workers:
-            process.join(timeout=max(0, grace_end - time.monotonic()))
-    for process in workers:
-        if process.is_alive():
-            process.kill()
+        for worker in workers:
+            worker.process.join(timeout=max(0, grace_end - time.monotonic()))
+    ungrouped = []
+    for worker in workers:
+        if os.name == "posix" and _signal_worker_group(worker, signal.SIGKILL):
+            continue
+        ungrouped.append(worker)
+        if worker.process.is_alive():
+            worker.process.kill()
     kill_end = time.monotonic() + 1.0
-    for process in workers:
-        process.join(timeout=max(0, kill_end - time.monotonic()))
-    surviving = [process.pid for process in workers if process.is_alive()]
+    for worker in workers:
+        worker.process.join(timeout=max(0, kill_end - time.monotonic()))
+    if os.name == "posix":
+        for worker in ungrouped:
+            # 启动中的 worker 可能在收到直接终止信号前刚建立了会话。
+            _signal_worker_group(worker, signal.SIGKILL)
+    surviving = [worker.process.pid for worker in workers if worker.process.is_alive()]
     if surviving:
         raise RuntimeError(f"无法终止 worker，PID: {surviving}。")
 
@@ -109,7 +138,7 @@ class LocalExecutor:
         try:
             return self._run(active)
         finally:
-            _stop_workers(worker.process for worker in active.values())
+            _stop_workers(active.values())
 
     def _run(self, active: dict[str, _Worker]) -> dict[str, TaskInstanceState | None]:
         context = multiprocessing.get_context("spawn")
@@ -135,7 +164,7 @@ class LocalExecutor:
                     and worker.previous_try_number + 1 == attempt.try_number
                     and worker.process.pid == attempt.worker_pid
                 ):
-                    _stop_workers([worker.process], force=True)
+                    _stop_workers([worker], force=True)
                     active.pop(task_id)
             task_states = self.store.list_task_states(self.dag.dag_id, self.run_id)
             if not active and all(
@@ -204,17 +233,18 @@ class LocalExecutor:
                     progressed = True
                     continue
 
-                try:
-                    queued = self.store.queue_task(
-                        self.dag.dag_id,
-                        self.run_id,
-                        task.task_id,
-                        scheduler_fence=self.scheduler_fence,
-                    )
-                except DagPaused:
-                    break
-                if not queued:
-                    continue
+                if current_state != TaskInstanceState.QUEUED:
+                    try:
+                        queued = self.store.queue_task(
+                            self.dag.dag_id,
+                            self.run_id,
+                            task.task_id,
+                            scheduler_fence=self.scheduler_fence,
+                        )
+                    except DagPaused:
+                        break
+                    if not queued:
+                        continue
                 ready_tasks.append(task)
 
             for task in ready_tasks:
@@ -275,9 +305,12 @@ class LocalExecutor:
             process = worker.process
             timed_out = False
             if process.is_alive():
-                if time.monotonic() < worker.startup_deadline or worker.ready.value:
+                if (
+                    time.monotonic() < worker.startup_deadline
+                    or worker.ready.value == _WorkerReadiness.DEFINITION_LOADED
+                ):
                     continue
-                _stop_workers([process], force=True)
+                _stop_workers([worker], force=True)
                 timed_out = True
             process.join(timeout=0)
             active.pop(task_id)
@@ -286,6 +319,9 @@ class LocalExecutor:
             if worker.outcome.value == _WorkerOutcome.DAG_PAUSED:
                 continue
             state = self.store.get_task_state(self.dag.dag_id, self.run_id, task_id)
+            if not timed_out and (state == TaskInstanceState.RUNNING or process.exitcode != 0):
+                # 异常退出的 worker 仍可能留下同组的子进程。
+                _stop_workers([worker], force=True)
             if state == TaskInstanceState.RUNNING:
                 task = self.dag.get_task(task_id)
                 delay, factor, maximum = task_retry_settings(self.dag, task)
@@ -355,6 +391,9 @@ def run_local_task_worker(
     outcome: Any,
     startup_deadline: float,
 ) -> None:
+    if os.name == "posix":
+        os.setsid()
+        ready.value = _WorkerReadiness.SESSION_CREATED
     store = SQLiteStateStore(database_url)
     record = store.get_dag_run(dag_id, run_id)
     if record is None:
@@ -364,7 +403,7 @@ def run_local_task_worker(
         loaded_hash = definition_hash_for_dag(
             dag, file_path, source_sha256=getattr(dag, "_easyflow_source_sha256", None)
         )
-        ready.value = 1
+        ready.value = _WorkerReadiness.DEFINITION_LOADED
         if time.monotonic() >= startup_deadline:
             outcome.value = _WorkerOutcome.STARTUP_TIMEOUT
             return

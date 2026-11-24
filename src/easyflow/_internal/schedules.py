@@ -22,6 +22,7 @@ _PRESETS = {
     "@yearly": "0 0 1 1 *",
 }
 MAX_CATCHUP_PER_SCAN = 1000
+_MICROSECOND = timedelta(microseconds=1)
 
 
 @dataclass(frozen=True)
@@ -148,7 +149,7 @@ def backfill_intervals(
 ) -> list[DataInterval]:
     if max_intervals is not None and max_intervals < 1:
         raise ValueError("max_intervals 必须大于 0。")
-    bounds = backfill_logical_date_bounds(
+    ranges = backfill_logical_date_ranges(
         schedule,
         start_date,
         end_date,
@@ -157,9 +158,11 @@ def backfill_intervals(
         start_bound=start_bound,
         end_bound=end_bound,
     )
-    if bounds is None:
-        return []
-    intervals = iter_backfill_intervals(schedule, *bounds)
+    intervals = (
+        interval
+        for first, last in ranges
+        for interval in iter_backfill_intervals(schedule, first, last)
+    )
     if max_intervals is None:
         return list(intervals)
     preview = list(islice(intervals, max_intervals + 1))
@@ -170,7 +173,7 @@ def backfill_intervals(
     return preview
 
 
-def backfill_logical_date_bounds(
+def backfill_logical_date_ranges(
     schedule: str | timedelta | None,
     start_date: date | datetime,
     end_date: date | datetime,
@@ -179,30 +182,49 @@ def backfill_logical_date_bounds(
     anchor: datetime | None = None,
     start_bound: datetime | None = None,
     end_bound: datetime | None = None,
-) -> tuple[datetime, datetime] | None:
-    """计算裁剪后的首尾逻辑日期，保留原调度锚点。"""
+) -> list[tuple[datetime, datetime]]:
+    """计算裁剪后的逻辑日期范围，保留原调度锚点及跨日回拨的间隔。"""
     if schedule is None:
         raise ValueError("无 schedule 的 DAG 不支持 backfill。")
-    start = _backfill_boundary(start_date, tz, end=False)
-    end = _backfill_boundary(end_date, tz, end=True)
-    if _utc(end) < _utc(start):
+    start, end, gaps = _backfill_window(start_date, end_date, tz)
+    if end < start:
+        if type(start_date) is date and type(end_date) is date:
+            # 有些时区调整会跳过整天。
+            return []
         raise ValueError("end-date 必须大于等于 start-date。")
     anchor = anchor or start
-    if start_bound is not None and _utc(start_bound) > _utc(start):
-        start = start_bound.astimezone(tz)
-    if end_bound is not None and _utc(end_bound) < _utc(end):
-        end = end_bound.astimezone(tz)
-    if _utc(start) > _utc(end):
-        return None
+    if start_bound is not None:
+        start = max(start, _utc(start_bound))
+    if end_bound is not None:
+        end = min(end, _utc(end_bound))
+    spans = []
+    for gap_start, gap_end in sorted(gaps):
+        spans.append((start, min(end, gap_start - _MICROSECOND)))
+        start = max(start, gap_end)
+    spans.append((start, end))
+    ranges = []
+    for left, right in spans:
+        if left > right:
+            continue
+        bounds = _logical_date_bounds(schedule, left.astimezone(tz), right.astimezone(tz), anchor)
+        if bounds is not None:
+            ranges.append(bounds)
+    return ranges
+
+
+def _logical_date_bounds(
+    schedule: str | timedelta, start: datetime, end: datetime, anchor: datetime
+) -> tuple[datetime, datetime] | None:
+    start_utc, end_utc = _utc(start), _utc(end)
     if schedule == "@once":
-        logical = anchor.astimezone(tz)
-        return (logical, logical) if _utc(start) <= _utc(logical) <= _utc(end) else None
+        logical = anchor.astimezone(start.tzinfo)
+        return (logical, logical) if start_utc <= _utc(anchor) <= end_utc else None
     first = _ceil_logical_date(schedule, start, anchor=anchor)
-    if _utc(first) > _utc(end):
+    if _utc(first) > end_utc:
         return None
     if isinstance(schedule, timedelta):
-        steps = (_utc(end) - _utc(first)) // schedule
-        last = (_utc(first) + steps * schedule).astimezone(tz)
+        steps = (end_utc - _utc(first)) // schedule
+        last = (_utc(first) + steps * schedule).astimezone(start.tzinfo)
     else:
         last = cron_previous_at_or_before(_expression(schedule), end)
     return first, last
@@ -233,12 +255,61 @@ def parse_backfill_boundary(value: str) -> date | datetime:
         return parsed
 
 
-def _backfill_boundary(value: date | datetime, tz: tzinfo, *, end: bool) -> datetime:
-    if isinstance(value, datetime):
-        if value.tzinfo is None or value.utcoffset() is None:
+def _backfill_window(
+    start_date: date | datetime, end_date: date | datetime, tz: tzinfo
+) -> tuple[datetime, datetime, list[tuple[datetime, datetime]]]:
+    """返回 UTC 包含边界和其中需要排除的左闭右开区间。"""
+    if type(start_date) is date and type(end_date) is date and end_date < start_date:
+        raise ValueError("end-date 必须大于等于 start-date。")
+    for boundary in (start_date, end_date):
+        if isinstance(boundary, datetime) and boundary.utcoffset() is None:
             raise ValueError("回补精确时间必须带时区。")
-        return value.astimezone(tz)
-    return datetime.combine(value, time.max if end else time.min, tzinfo=tz)
+    gaps = []
+    if isinstance(start_date, datetime):
+        start = _utc(start_date)
+    else:
+        start, repeated = _local_date_start(start_date, tz)
+        if repeated is not None:
+            gaps.append(repeated)
+    if isinstance(end_date, datetime):
+        end = _utc(end_date)
+    elif end_date == date.max:
+        end = _utc(datetime.combine(end_date, time.max, tzinfo=tz).replace(fold=1))
+    else:
+        end, repeated = _local_date_start(end_date + timedelta(days=1), tz)
+        if repeated is not None:
+            rollback, next_midnight = repeated
+            gaps.append((end, rollback))
+            end = next_midnight
+        end -= _MICROSECOND
+    return start, end, gaps
+
+
+def _local_date_start(
+    day: date, tz: tzinfo
+) -> tuple[datetime, tuple[datetime, datetime] | None]:
+    """返回日期的首次边界，以及回拨至前一日到再次跨日的区间。"""
+    midnight = datetime.combine(day, time.min, tzinfo=tz)
+    first, second = _utc(midnight), _utc(midnight.replace(fold=1))
+    if second < first:
+        # 午夜不存在时，定位前拨发生的实际时刻。
+        return _date_transition(second, first, day, tz, forward=True), None
+    if first < second and (second - _MICROSECOND).astimezone(tz).date() < day:
+        rollback = _date_transition(first, second - _MICROSECOND, day, tz, forward=False)
+        return first, (rollback, second)
+    return first, None
+
+
+def _date_transition(
+    before: datetime, after: datetime, day: date, tz: tzinfo, *, forward: bool
+) -> datetime:
+    while after - before > _MICROSECOND:
+        middle = before + (after - before) // 2
+        if (middle.astimezone(tz).date() >= day) == forward:
+            after = middle
+        else:
+            before = middle
+    return after
 
 
 def interval_for_logical_date(

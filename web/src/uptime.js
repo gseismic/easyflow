@@ -181,7 +181,8 @@ export function uptimeFailuresUrl(dagId, slot, offset = 0) {
 }
 
 export function failureKey(item) {
-  return JSON.stringify([item.run_id, item.task_id, item.try_number]);
+  return JSON.stringify([item.run_id, item.task_id, item.try_number,
+    item.task_id == null ? item.ended_at : null]);
 }
 
 export function failureRunHref(dagId, item) {
