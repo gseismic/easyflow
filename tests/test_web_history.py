@@ -4,6 +4,7 @@ import base64
 import sqlite3
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from easyflow.web.app import create_app
@@ -31,6 +32,51 @@ def add_run(
         "VALUES (?, ?, 'manual', ?, ?, ?, ?, ?)",
         (dag_id, run_id, queued_at, queued_at, queued_at, state, queued_at),
     )
+
+
+@pytest.mark.parametrize("length", [990_000, 1_005_000])
+def test_log_read_is_bounded_when_file_grows_after_size_check(tmp_path, monkeypatch, length):
+    app, _ = history_client(tmp_path)
+    service = app.state.service
+    service.log_root.mkdir()
+    path = service.log_root / "work.log"
+    path.write_bytes(b"a" * length)
+    with sqlite3.connect(service.store.path) as connection:
+        add_run(connection, "demo", "run")
+        connection.execute(
+            "INSERT INTO task_try (dag_id, run_id, task_id, try_number, state, log_path) "
+            "VALUES ('demo', 'run', 'work', 1, 'running', ?)",
+            (str(path),),
+        )
+    source_open = Path.open
+
+    class AppendingLog:
+        def __enter__(self):
+            self.file = source_open(path, "rb")
+            return self
+
+        def __exit__(self, *exc):
+            self.file.close()
+
+        def __getattr__(self, name):
+            return getattr(self.file, name)
+
+        def tell(self):
+            size = self.file.tell()
+            with source_open(path, "ab") as file:
+                file.write(b"b" * 30_000)
+            return size
+
+    def open_log(target, mode="r", *args, **kwargs):
+        if target == path and mode == "rb":
+            return AppendingLog()
+        return source_open(target, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_log)
+    log = service.task_log("demo", "run", "work", None)
+    assert path.stat().st_size == length + 30_000
+    assert log["content"] == "a" * min(length, 1_000_000)
+    assert log["truncated"] is (length > 1_000_000)
 
 
 def test_history_pagination_auth_filter_and_new_runs(tmp_path):

@@ -38,7 +38,8 @@ def task_logs(
 @router.post("/clear-preview")
 @query_router.post("/clear-preview")
 def clear_preview(dag_id: str, run_id: str, body: ClearRequest, request: Request):
-    service, _ = _check_run(request, dag_id, run_id)
+    service, record = _check_run(request, dag_id, run_id)
+    service.check_clear_definition(record)
     result = service.store.preview_clear_task_instances(
         dag_id=dag_id, run_id=run_id, task_ids=body.task_ids
     )
@@ -54,12 +55,14 @@ def clear_preview(dag_id: str, run_id: str, body: ClearRequest, request: Request
 @router.post("/clear")
 @query_router.post("/clear")
 def clear_tasks(dag_id: str, run_id: str, body: ClearRequest, request: Request):
-    service, _ = _check_run(request, dag_id, run_id)
+    service, record = _check_run(request, dag_id, run_id)
+    source = service.check_clear_definition(record)
     result = service.store.clear_task_instances(
         dag_id=dag_id,
         run_id=run_id,
         task_ids=body.task_ids,
         actor=f"web:{request.state.user.username}",
+        check_definition=lambda: service.check_clear_definition(record, source=source),
     )
     if result.blocked:
         reasons = " ".join(f"{item.task_id}：{item.reason}" for item in result.blocked)

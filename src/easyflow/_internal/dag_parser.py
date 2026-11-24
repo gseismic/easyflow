@@ -8,13 +8,16 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from functools import cache
 from pathlib import Path
 from types import FunctionType, MethodType, ModuleType
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from easyflow._internal.schedules import validate_schedule
 from easyflow._internal.source_imports import LocalSourceFinder, local_source_imports
@@ -22,6 +25,10 @@ from easyflow.sdk.dag import DAG, collect_registered_dags
 from easyflow.sdk.operators.base import BaseOperator
 
 PARSER_TIMEOUT_SECONDS = 30
+
+
+class DagSourceChanged(ValueError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -57,9 +64,9 @@ class AsyncDagDiscovery:
         self.pool = ThreadPoolExecutor(
             max_workers=8, thread_name_prefix="easyflow-parse"
         )
-        self.entries: dict[Path, tuple[tuple[int, int], float, DagDiscoveryResult]] = {}
+        self.entries: dict[Path, tuple[tuple[int, int, int], float, DagDiscoveryResult]] = {}
         self.pending: dict[
-            Path, tuple[tuple[int, int], Future[DagDiscoveryResult]]
+            Path, tuple[tuple[int, int, int], Future[DagDiscoveryResult]]
         ] = {}
 
     def close(self) -> None:
@@ -79,11 +86,25 @@ class AsyncDagDiscovery:
                 stat = path.stat()
             except OSError:
                 continue
-            signatures[path] = (stat.st_mtime_ns, stat.st_size)
-        for path in set(self.entries) - signatures.keys():
-            self.entries.pop(path)
+            signatures[path] = (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
         for path in set(self.pending) - signatures.keys():
             self.pending.pop(path)[1].cancel()
+
+        file_hash = cache(_file_hash)
+
+        def current(result: DagDiscoveryResult) -> bool:
+            return all(
+                file_hash(filename) == digest
+                for source in result.sources
+                for filename, digest in _loaded_source_hashes(
+                    source.dag, source.file_path if source.dag_id == dag_id else None
+                )
+            )
+
+        def discard_stale() -> None:
+            for path, (signature, _, result) in list(self.entries.items()):
+                if signatures.get(path) != signature or not current(result):
+                    self.entries.pop(path)
 
         def harvest() -> None:
             for path, (signature, future) in list(self.pending.items()):
@@ -98,14 +119,13 @@ class AsyncDagDiscovery:
                     result = DagDiscoveryResult(
                         [], [DagParseIssue(path, None, str(exc))]
                     )
-                self.entries[path] = (signature, time.monotonic(), result)
+                if current(result):
+                    self.entries[path] = (signature, time.monotonic(), result)
 
+        discard_stale()
         harvest()
         for path, signature in signatures.items():
             entry = self.entries.get(path)
-            if entry and entry[0] != signature:
-                self.entries.pop(path)
-                entry = None
             if path not in self.pending and (
                 entry is None or time.monotonic() - entry[1] > 5
             ):
@@ -133,6 +153,8 @@ class AsyncDagDiscovery:
                 timeout=wait_seconds,
                 return_when=FIRST_COMPLETED,
             )
+            file_hash.cache_clear()
+            discard_stale()
             harvest()
         sources = [
             source
@@ -155,13 +177,34 @@ class AsyncDagDiscovery:
 
 
 def load_dag_from_file(file_path: str | Path, dag_id: str) -> DAG:
+    with open_dag_from_file(file_path, dag_id) as dag:
+        return dag
+
+
+@contextmanager
+def open_dag_from_file(file_path: str | Path, dag_id: str) -> Iterator[DAG]:
     path = Path(file_path).resolve()
-    return _select_dag(_inspect_dags_in_process(path), path, dag_id)
+    with _inspect_dag_file(path) as result:
+        yield _select_dag(result, path, dag_id)
 
 
 def load_dag_snapshot(file_path: str | Path, dag_id: str) -> DAG:
     path = Path(file_path).resolve()
-    return _select_dag(inspect_dags_from_file(path), path, dag_id)
+    for _ in range(2):
+        dag = _select_dag(inspect_dags_from_file(path), path, dag_id)
+        if dag_source_is_current(dag, path):
+            return dag
+    raise DagSourceChanged("解析期间 DAG 源码或本地依赖持续变化，请重试。")
+
+
+def refresh_dag_source(source: DagSource) -> DagSource:
+    if dag_source_is_current(source.dag, source.file_path):
+        return source
+    return DagSource(
+        source.dag_id,
+        source.file_path,
+        load_dag_snapshot(source.file_path, source.dag_id),
+    )
 
 
 def _select_dag(result: DagDiscoveryResult, path: Path, dag_id: str) -> DAG:
@@ -238,17 +281,18 @@ def inspect_dags_from_file(
     return DagDiscoveryResult(sources, issues)
 
 
-def _inspect_dags_in_process(file_path: str | Path) -> DagDiscoveryResult:
-    path = Path(file_path).resolve()
-    try:
-        with local_source_imports(path) as finder:
-            module = _load_module(path)
+@contextmanager
+def _inspect_dag_file(path: Path) -> Iterator[DagDiscoveryResult]:
+    with ExitStack() as scope:
+        try:
+            finder = scope.enter_context(local_source_imports(path))
+            module = scope.enter_context(_load_module(path))
             sources, issues = _sources_from_module(module, path, finder)
-    except Exception as exc:
-        return DagDiscoveryResult([], [DagParseIssue(path, None, str(exc))])
-    sources, duplicate_issues = _remove_duplicate_dag_ids(sources)
-    issues.extend(duplicate_issues)
-    return DagDiscoveryResult(sources, issues)
+        except Exception as exc:
+            sources, issues = [], [DagParseIssue(path, None, str(exc))]
+        sources, duplicate_issues = _remove_duplicate_dag_ids(sources)
+        issues.extend(duplicate_issues)
+        yield DagDiscoveryResult(sources, issues)
 
 
 def discover_dag_files(dags_folder: str | Path) -> list[Path]:
@@ -312,10 +356,8 @@ def definition_hash_for_dag(
     }
     if file_path is not None:
         path = Path(file_path)
-        if path.exists():
-            payload["source_sha256"] = (
-                source_sha256 or hashlib.sha256(path.read_bytes()).hexdigest()
-            )
+        if source_sha256 is not None or path.exists():
+            payload["source_sha256"] = source_sha256 or _file_hash(path)
         dependencies = getattr(dag, "_easyflow_dependency_hashes", {})
         payload["dependencies"] = {
             name: digest if source_sha256 is not None else _file_hash(Path(name))
@@ -325,7 +367,23 @@ def definition_hash_for_dag(
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _load_module(path: Path) -> ModuleType:
+def _loaded_source_hashes(dag: DAG, file_path: Path | None) -> Iterator[tuple[Path, str]]:
+    source_sha256 = getattr(dag, "_easyflow_source_sha256", None)
+    if file_path is not None and source_sha256 is not None:
+        yield file_path, source_sha256
+    for name, digest in getattr(dag, "_easyflow_dependency_hashes", {}).items():
+        yield Path(name), digest
+
+
+def dag_source_is_current(dag: DAG, file_path: str | Path) -> bool:
+    return all(
+        _file_hash(path) == digest
+        for path, digest in _loaded_source_hashes(dag, Path(file_path))
+    )
+
+
+@contextmanager
+def _load_module(path: Path) -> Iterator[ModuleType]:
     module_name = f"_easyflow_dag_{hashlib.sha256(str(path).encode()).hexdigest()}"
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
@@ -340,13 +398,12 @@ def _load_module(path: Path) -> ModuleType:
         with collect_registered_dags() as dags:
             exec(compile(source, str(path), "exec"), module.__dict__)
         module.__easyflow_registered_dags__ = dags
-    except Exception:
+        yield module
+    finally:
         if old_module is not None:
             sys.modules[module_name] = old_module
         else:
             sys.modules.pop(module_name, None)
-        raise
-    return module
 
 
 def _sources_from_module(
@@ -403,7 +460,21 @@ def _remove_duplicate_dag_ids(
 def _encode_datetime(value: datetime | None) -> dict[str, str | None] | None:
     if value is None:
         return None
-    return {"value": value.isoformat(), "zone": getattr(value.tzinfo, "key", None)}
+    encoded = value.isoformat()
+    tz = value.tzinfo
+    zone = getattr(tz, "key", None) or getattr(tz, "zone", None)
+    if zone:
+        try:
+            restored = datetime.fromisoformat(encoded).astimezone(ZoneInfo(zone))
+        except (ZoneInfoNotFoundError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"无法重建 DAG 时区 {zone!r}，请使用有效的 IANA 时区。"
+            ) from exc
+        if restored.isoformat() != encoded:
+            raise ValueError(f"DAG 日期 {encoded} 无法用时区 {zone!r} 无损保存。")
+    elif tz is not None and tz.utcoffset(None) != value.utcoffset():
+        raise ValueError("无法重建 DAG 的动态时区，请使用 IANA 时区或固定偏移。")
+    return {"value": encoded, "zone": zone}
 
 
 def _decode_datetime(value: dict[str, str | None] | None) -> datetime | None:
@@ -544,14 +615,22 @@ def _local_dependency_hashes(
 
 
 def _write_snapshot(file_path: str, output_path: str) -> None:
-    result = _inspect_dags_in_process(file_path)
-    payload = {
-        "dags": [_snapshot_dag(source.dag) for source in result.sources],
-        "issues": [
-            {"dag_id": issue.dag_id, "message": issue.message}
-            for issue in result.issues
-        ],
-    }
+    path = Path(file_path).resolve()
+    with _inspect_dag_file(path) as result:
+        dags = []
+        issues = list(result.issues)
+        for source in result.sources:
+            try:
+                dags.append(_snapshot_dag(source.dag))
+            except (TypeError, ValueError) as exc:
+                issues.append(DagParseIssue(path, source.dag_id, str(exc)))
+        payload = {
+            "dags": dags,
+            "issues": [
+                {"dag_id": issue.dag_id, "message": issue.message}
+                for issue in issues
+            ],
+        }
     Path(output_path).write_text(
         json.dumps(payload, ensure_ascii=False), encoding="utf-8"
     )

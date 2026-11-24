@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 import json
 
 import pytest
 
+from easyflow._internal.persistent_runner import PersistentDagRunner
+from easyflow._internal.state_store import SQLiteStateStore
 from easyflow.sdk import (
     DAG,
     ContextNotAvailableError,
@@ -20,6 +22,33 @@ from easyflow.providers.standard.operators.bash import BashOperator
 from easyflow.providers.standard.operators.empty import EmptyOperator
 from easyflow.providers.standard.operators.python import PythonOperator
 from easyflow.sdk.states import TaskInstanceState
+
+
+def test_python_operators_reject_async_callables_and_results(tmp_path):
+    async def work():
+        return "不能报告成功"
+
+    class AsyncCallable:
+        async def __call__(self):
+            return "不能报告成功"
+
+    with DAG("async_task") as dag:
+        with pytest.raises(TypeError, match="仅支持同步"):
+            PythonOperator(task_id="async_function", python_callable=work, do_xcom_push=False)
+        with pytest.raises(TypeError, match="仅支持同步"):
+            PythonOperator(task_id="async_object", python_callable=AsyncCallable())
+        with pytest.raises(TypeError, match="仅支持同步"):
+            task(work)()
+        PythonOperator(task_id="work", python_callable=lambda: work(), do_xcom_push=False)
+
+    logical_date = datetime(2026, 7, 6, tzinfo=UTC)
+    assert dag.test(logical_date).task_states["work"] == TaskInstanceState.FAILED
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    runner = PersistentDagRunner(store, log_root=tmp_path / "logs")
+    run_id = runner.create_manual_run(dag, file_path=None, logical_date=logical_date)
+    result = runner.run_existing(dag, run_id=run_id)
+    assert result.task_states["work"] == TaskInstanceState.FAILED
+    assert "不能返回异步结果" in runner._log_path(dag.dag_id, run_id, "work", 1).read_text()
 
 
 def test_taskflow_resolves_xcom_and_auto_dependency() -> None:

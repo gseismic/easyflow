@@ -15,7 +15,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from easyflow._internal.dag_parser import definition_hash_for_dag
+from easyflow._internal.dag_parser import (
+    DagSourceChanged,
+    dag_source_is_current,
+    definition_hash_for_dag,
+)
 from easyflow._internal.schedules import DataInterval
 from easyflow._internal.state_store import (
     SchedulerFence,
@@ -185,10 +189,13 @@ class PersistentDagRunner:
         reprocessing_behavior: str | None = None,
     ) -> str:
         loaded_source = getattr(dag, "_easyflow_source_sha256", None)
-        if file_path is not None and loaded_source is not None:
-            actual_source = hashlib.sha256(Path(file_path).read_bytes()).hexdigest()
-            if actual_source != loaded_source:
-                raise RuntimeError("创建 DagRun 前 DAG 源码已改变，请重新加载。")
+
+        def check_definition() -> None:
+            if file_path is not None and not dag_source_is_current(dag, file_path):
+                raise DagSourceChanged(
+                    "创建 DagRun 前 DAG 源码或本地依赖已改变，请重新加载。"
+                )
+
         self.store.create_dag_run(
             dag=dag,
             run_id=run_id,
@@ -206,6 +213,7 @@ class PersistentDagRunner:
             only_once=run_type == "scheduled" and dag.schedule == "@once",
             scheduler_fence=self.scheduler_fence,
             reprocessing_behavior=reprocessing_behavior,
+            check_definition=check_definition if file_path is not None else None,
         )
         return run_id
 

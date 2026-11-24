@@ -1,14 +1,144 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
+import pytest
+
+from easyflow._internal import local_executor
 from easyflow._internal.dag_parser import load_dag_from_file
 from easyflow._internal.persistent_runner import PersistentDagRunner
 from easyflow._internal.state_store import SQLiteStateStore
 from easyflow.cli import main
+
+
+def test_expired_local_worker_is_reaped_and_keeps_its_retry(tmp_path):
+    path = tmp_path / "retry.py"
+    started = tmp_path / "started"
+    late = tmp_path / "late"
+    path.write_text(
+        f"""
+from multiprocessing import parent_process
+from pathlib import Path
+import time
+from easyflow._internal.task_heartbeat import TaskHeartbeat
+from easyflow.sdk import DAG, task
+
+if parent_process() is not None:
+    TaskHeartbeat.start = lambda self: None
+
+with DAG('retry') as dag:
+    @task(retries=1)
+    def work():
+        marker = Path({str(started)!r})
+        if not marker.exists():
+            marker.touch()
+            time.sleep(3)
+            Path({str(late)!r}).touch()
+        return '重试完成'
+    work()
+""",
+        encoding="utf-8",
+    )
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    dag = load_dag_from_file(path, "retry")
+    runner = PersistentDagRunner(store, log_root=tmp_path / "logs", task_lease_seconds=1)
+    run_id = runner.create_manual_run(dag, file_path=path, logical_date=datetime.now(UTC))
+    result = runner.run_existing(dag, run_id=run_id, file_path=path, executor="local")
+    assert result.state.value == "success"
+    assert started.exists() and not late.exists()
+    assert store.pull_xcom("retry", run_id, "work", "return_value") == "重试完成"
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute(
+            "SELECT try_number, state, error_code FROM task_try ORDER BY try_number"
+        ).fetchall() == [(1, "failed", "TASK_PROCESS_LOST"), (2, "success", None)]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="使用 POSIX SIGTERM 处理器")
+@pytest.mark.parametrize("phase", ["startup", "shutdown"])
+def test_local_worker_ignoring_sigterm_stops(tmp_path, monkeypatch, phase):
+    path = tmp_path / "slow.py"
+    started = tmp_path / "started"
+    finished = tmp_path / "finished"
+    path.write_text(
+        f"""
+from multiprocessing import parent_process
+from pathlib import Path
+import signal
+import time
+from easyflow.sdk import DAG, task
+
+if parent_process() is not None:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    if {phase!r} == 'startup':
+        Path({str(started)!r}).touch()
+        time.sleep(4)
+
+with DAG('slow') as dag:
+    @task
+    def work():
+        if {phase!r} == 'shutdown':
+            Path({str(started)!r}).touch()
+            time.sleep(4)
+        Path({str(finished)!r}).touch()
+    work()
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(local_executor, "PARSER_TIMEOUT_SECONDS", 2)
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    dag = load_dag_from_file(path, "slow")
+    runner = PersistentDagRunner(
+        store, log_root=tmp_path / "logs",
+        should_continue=lambda: phase == "startup" or not started.exists(),
+    )
+    run_id = runner.create_manual_run(dag, file_path=path, logical_date=datetime.now(UTC))
+    result = runner.run_existing(dag, run_id=run_id, file_path=path, executor="local")
+    assert started.exists() and not finished.exists()
+    if phase == "startup":
+        assert result.state.value == "failed"
+        with sqlite3.connect(store.path) as connection:
+            assert connection.execute("SELECT error_code, error_message FROM task_try").fetchall() == [
+                ("WORKER_STARTUP_FAILED", "Worker 在领取任务前启动超时。")
+            ]
+    else:
+        assert result.state.value == "running"
+
+
+def test_file_tasks_keep_local_annotation_modules_through_execution(tmp_path):
+    helper = tmp_path / "review_annotations.py"
+    helper.write_text(
+        "from __future__ import annotations\nAlias = int\nclass Payload:\n    value: Alias\n",
+        encoding="utf-8",
+    )
+    path = tmp_path / "typed.py"
+    path.write_text(
+        """
+from typing import get_type_hints
+from review_annotations import Payload
+from easyflow.sdk import DAG, task
+
+with DAG('typed') as dag:
+    @task
+    def work():
+        assert get_type_hints(Payload) == {'value': int}
+        return '解析成功'
+    work()
+""",
+        encoding="utf-8",
+    )
+    assert main(["dags", "test", "typed", "--file", str(path)]) == 0
+    assert "review_annotations" not in sys.modules
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    runner = PersistentDagRunner(store, log_root=tmp_path / "logs")
+    dag = load_dag_from_file(path, "typed")
+    run_id = runner.create_manual_run(dag, file_path=path, logical_date=datetime.now(UTC))
+    result = runner.run_existing(dag, run_id=run_id, file_path=path, executor="local")
+    assert result.state.value == "success"
+    assert store.pull_xcom("typed", run_id, "work", "return_value") == "解析成功"
 
 
 def _successful_windows(store, run_id):

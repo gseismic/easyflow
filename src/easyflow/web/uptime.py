@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from datetime import UTC, datetime, time, timedelta
 from itertools import pairwise
 from math import ceil, floor
@@ -102,16 +102,26 @@ def workflow_uptime(
         connection.row_factory = sqlite3.Row
         # 使用 Python 时间转换保留微秒精度，避免 SQLite 时间函数在整点附近舍入。
         connection.create_function("uptime_time", 1, _timestamp, deterministic=True)
+        connection.create_function(
+            "uptime_slot",
+            1,
+            lambda stamp: bisect_right(boundaries, stamp) - 1,
+            deterministic=True,
+        )
+        connection.create_function(
+            "uptime_stop",
+            1,
+            lambda stamp: bisect_left(boundaries, stamp),
+            deterministic=True,
+        )
+        connection.execute("BEGIN")
         connection.execute("CREATE TEMP TABLE uptime_ids (dag_id TEXT PRIMARY KEY)")
         connection.executemany(
             "INSERT INTO uptime_ids VALUES (?)", ((item,) for item in ids)
         )
-        connection.execute(
-            "CREATE TEMP TABLE uptime_slots (position INTEGER, start REAL, end REAL)"
-        )
+        connection.execute("CREATE TEMP TABLE uptime_slots (position INTEGER PRIMARY KEY)")
         connection.executemany(
-            "INSERT INTO uptime_slots VALUES (?, ?, ?)",
-            ((i, boundaries[i], boundaries[i + 1]) for i in range(len(boundaries) - 1)),
+            "INSERT INTO uptime_slots VALUES (?)", ((i,) for i in range(len(boundaries) - 1)),
         )
         # 各项聚合共享读取快照；不把任务数量和运行数量混为一谈。
         # CROSS JOIN 固定由少量工作流 ID 驱动范围索引，避免优化器先扫描全部历史。
@@ -141,18 +151,25 @@ def workflow_uptime(
                         SELECT 1 FROM task_try t
                         WHERE t.dag_id = r.dag_id AND t.run_id = r.run_id
                     )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM task_instance t
+                        WHERE t.dag_id = r.dag_id AND t.run_id = r.run_id
+                    )
+            ), matched AS (
+                SELECT s.position, a.dag_id, a.run_id, 0 AS running
+                FROM intervals a CROSS JOIN uptime_slots s
+                WHERE a.started <= :now AND s.position >= uptime_slot(a.started)
+                    AND s.position < CASE WHEN a.started = a.ended
+                        THEN uptime_slot(a.started) + 1 ELSE uptime_stop(a.ended) END
+                UNION ALL
+                SELECT :current_position, a.dag_id, a.run_id, 1
+                FROM intervals a
+                WHERE :current_position IS NOT NULL AND a.running AND a.started <= :now
             )
-            SELECT s.position, a.dag_id, COUNT(DISTINCT a.run_id) AS run_count,
-                COUNT(DISTINCT CASE WHEN a.running AND s.position = :current_position
-                    THEN a.run_id END) AS running_count,
-                MIN(a.run_id) AS sample_run_id
-            FROM intervals a JOIN uptime_slots s
-                ON a.started <= :now AND (
-                    (a.started < s.end
-                     AND (a.ended > s.start OR (a.ended = a.started AND a.started >= s.start)))
-                    OR (a.running AND s.position = :current_position)
-                )
-            GROUP BY s.position, a.dag_id
+            SELECT position, dag_id, COUNT(DISTINCT run_id) AS run_count,
+                COUNT(DISTINCT CASE WHEN running THEN run_id END) AS running_count,
+                MIN(run_id) AS sample_run_id
+            FROM matched GROUP BY position, dag_id
             """,
             {
                 **_range_params(start, end),
@@ -176,13 +193,15 @@ def workflow_uptime(
                 WHERE r.state = 'failed' AND r.end_date IS NOT NULL
                     AND COALESCE(julianday(r.end_date), 1e100) >= :start_jd
                     AND COALESCE(julianday(r.end_date), 0) < :end_jd
+            ), bucketed AS (
+                SELECT uptime_slot(failed_at) AS position, * FROM errors
+                WHERE failed_at >= :start AND failed_at < :end AND failed_at <= :now
             ), matched AS (
-                SELECT s.position, e.*, ROW_NUMBER() OVER (
-                    PARTITION BY s.position, e.dag_id
+                SELECT e.*, ROW_NUMBER() OVER (
+                    PARTITION BY e.position, e.dag_id
                     ORDER BY e.run_id, e.task_id IS NULL, e.failed_at, e.task_id, e.try_number
                 ) AS priority
-            FROM errors e JOIN uptime_slots s ON e.failed_at >= s.start AND e.failed_at < s.end
-                AND e.failed_at <= :now
+                FROM bucketed e
             )
             SELECT position, dag_id, COUNT(DISTINCT run_id) AS failed_run_count,
                 MAX(CASE WHEN priority = 1 THEN run_id END) AS sample_run_id,
@@ -190,7 +209,12 @@ def workflow_uptime(
                 MAX(CASE WHEN priority = 1 THEN try_number END) AS sample_try_number
             FROM matched GROUP BY position, dag_id
             """,
-            {**_range_params(start, end), "now": as_of},
+            {
+                **_range_params(start, end),
+                "start": start.timestamp(),
+                "end": end.timestamp(),
+                "now": as_of,
+            },
         ).fetchall()
         waiting = connection.execute(
             "SELECT r.dag_id, COUNT(DISTINCT r.run_id) AS waiting_run_count, "

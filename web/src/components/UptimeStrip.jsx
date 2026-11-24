@@ -11,7 +11,8 @@ export default function UptimeStrip({ dagId, slots, error, period = "day", onOpe
   const buttons = useRef([]);
   if (!slots) return <div className="uptime-placeholder" role="status">{error ? "运行时段不可用，请重试。" : "正在加载运行时段…"}</div>;
   const currentSelection = slots.find(slot => uptimeSlotKey(slot, period) === selection?.key);
-  const selected = period === "recent" && currentSelection ? selection.slot : currentSelection;
+  const selected = period === "recent" && (currentSelection || selection?.slot.failed_run_count > 0)
+    ? selection.slot : currentSelection;
   const focusIndex = Math.max(0, slots.findIndex(slot => uptimeSlotKey(slot, period) === focused));
   const select = slot => setSelection({ key: uptimeSlotKey(slot, period), slot: { ...slot } });
   const activityCount = slots.filter((slot) => slot.run_count > 0).length;
@@ -20,7 +21,8 @@ export default function UptimeStrip({ dagId, slots, error, period = "day", onOpe
   const daily = dailyUptime(period);
   const describe = createSlotDescriber(period);
   const closeSelection = () => {
-    buttons.current[slots.findIndex(slot => uptimeSlotKey(slot, period) === selection?.key)]?.focus();
+    const index = slots.findIndex(slot => uptimeSlotKey(slot, period) === selection?.key);
+    buttons.current[index >= 0 ? index : focusIndex]?.focus();
     setSelection(null);
   };
   const onKeyDown = (event, index) => {

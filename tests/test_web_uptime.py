@@ -58,6 +58,27 @@ def add_try(
     )
 
 
+def test_running_dag_without_a_started_task_is_waiting(tmp_path):
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    store.init_db()
+    now = START + timedelta(minutes=15)
+    with sqlite3.connect(store.path) as connection:
+        add_run(connection, "queued-worker", state="running", start=START.isoformat())
+        connection.execute(
+            "INSERT INTO task_instance (dag_id, run_id, task_id, state) "
+            "VALUES ('demo', 'queued-worker', 'work', 'queued')"
+        )
+        add_run(connection, "legacy-run", dag_id="legacy", state="running", start=START.isoformat())
+    data = workflow_uptime(
+        store.path, dag_ids=["demo", "legacy"], now=now, lookback_hours=1
+    )["workflows"]
+    waiting = data["demo"][-1]
+    assert waiting["state"] == "waiting"
+    assert waiting["run_count"] == 0 and waiting["waiting_run_count"] == 1
+    assert data["legacy"][-1]["state"] == "running"
+    assert data["legacy"][-1]["run_count"] == 1
+
+
 def test_failure_details_preserve_recovered_attempts_and_paginate_all_failures(
     tmp_path,
 ):

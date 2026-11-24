@@ -224,12 +224,22 @@ def login_admin(app, client):
 
 def test_slash_ids_support_details_logs_clear_and_authorization(tmp_path):
     run_id, task_id = "custom/run +%?#中文", "group/task +%?#中文"
-    dag, store, runner = make_run(
-        tmp_path, task_id=task_id, run_id=run_id, log_root=tmp_path / "logs"
+    dags = tmp_path / "dags"
+    dags.mkdir()
+    path = dags / "demo.py"
+    path.write_text(
+        "from easyflow.sdk import DAG\n"
+        "from easyflow.providers.standard.operators.empty import EmptyOperator\n"
+        f"with DAG('demo') as dag:\n    EmptyOperator(task_id={task_id!r})\n",
+        encoding="utf-8",
     )
-    assert runner.run_existing(dag, run_id=run_id).state.value == "success"
+    dag = load_dag_from_file(path, "demo")
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    runner = PersistentDagRunner(store, log_root=tmp_path / "logs")
+    runner.create_manual_run(dag, file_path=path, logical_date=AT, run_id=run_id)
+    assert runner.run_existing(dag, run_id=run_id, file_path=path).state.value == "success"
     app = create_app(
-        dags_folder=str(tmp_path / "dags"),
+        dags_folder=str(dags),
         database_url=store.database_url,
         log_root=str(tmp_path / "logs"),
     )

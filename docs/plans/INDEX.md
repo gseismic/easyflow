@@ -73,3 +73,5 @@
 - 2026-11-17 10:03 Asia/Shanghai：[前端 Review 修复与循环复审结果](PLAN-20261117-003-model-unknown-frontend-review-loop-OUTCOME.md)，已完成（WORKTREE）；三项修复及窄屏弹窗回归通过，38 项前端、298 项后端、最终构建、定向与导航浏览器回归及真实隔离 Web 验收通过；版本 `0.1.2 → 0.1.3`，最后一轮无待修复逻辑问题，未提交或推送，业务 Web 需重启加载新 API。
 - 2026-11-22 16:13 Asia/Shanghai：[全量代码 Review 修复计划](PLAN-20261122-001-model-unknown-all-code-review-fixes.md)，进行中，覆盖 R01–R21。
 - 2026-11-22 16:49 Asia/Shanghai：[全量代码 Review 修复结果](PLAN-20261122-001-model-unknown-all-code-review-fixes-OUTCOME.md)，已完成（WORKTREE），21 项均已复验。319 项后端、38 项前端、浏览器、构建资源保留与分发包检查通过。
+- 2026-11-24 18:27 Asia/Shanghai，新增[全量 Review 修复与复审计划](PLAN-20261124-001-model-unknown-review-fix-loop.md)，进行中，覆盖 R01–R18。
+- 2026-11-24 18:59 Asia/Shanghai，[全量 Review 修复与复审结果](PLAN-20261124-001-model-unknown-review-fix-loop-OUTCOME.md)，已完成（WORKTREE）。18 项均已复验，342 项后端、38 项前端、构建、浏览器与打包验证通过。

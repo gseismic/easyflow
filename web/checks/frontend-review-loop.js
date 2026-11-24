@@ -23,10 +23,21 @@ async original => {
   let backfillStatus = 200;
   let backfillEligible = true;
   let role = 'admin';
+  let rolledUptime = null;
   const ids = ['.', '..', 'detail', 'daily_sync'];
   const runId = 'custom/run +%?#中文';
+  const historicalHash = 'historical-definition';
+  const firstSlot = {
+    start_at: '2026-11-16T23:03:00Z', end_at: '2026-11-16T23:30:00Z',
+    state: 'failed', run_count: 1, failed_run_count: 1, sample_run_id: runId,
+  };
+  const nextSlot = {
+    start_at: firstSlot.end_at, end_at: '2026-11-17T00:00:00Z',
+    state: 'idle', run_count: 0, failed_run_count: 0,
+  };
   const definitions = Object.fromEntries(ids.map(dag_id => [dag_id, {
-    dag_id, task_count: 1, tasks: [{ task_id: 'example', upstream: [], downstream: [], operator_type: 'EmptyOperator' }],
+    dag_id, definition_hash: historicalHash, task_count: 1,
+    tasks: [{ task_id: 'example', upstream: [], downstream: [], operator_type: 'EmptyOperator' }],
     runs: [{ run_id: runId, state: 'success', run_type: 'manual', queued_at: '2026-11-16T23:00:00Z' }],
     schedule: '@daily', paused: false, scheduler_running: false, project_kind: 'project', project: 'review',
     timezone: 'UTC', tags: [], latest_run: { state: 'success' }, running_count: 0,
@@ -42,7 +53,7 @@ async original => {
     const dagId = get('dag_id');
     const definition = definitions[dagId];
     const body = request.method() === 'POST' ? request.postDataJSON() : null;
-    calls.push({ path, dagId, runId: get('run_id'), body });
+    calls.push({ path, dagId, runId: get('run_id'), start: get('start_at'), end: get('end_at'), body });
     if (path === '/api/auth/session') return reply(route, { username: 'review-check', role, csrf_token: 'fixture' });
     if (path === '/api/catalog') return reply(route, { loading: false, scheduler: { running: false }, issues: [] });
     if (path === '/api/workflows/facets') return reply(route, {
@@ -50,9 +61,19 @@ async original => {
     });
     if (path === '/api/workflows') return reply(route, { dags: Object.values(definitions), loading: false });
     if (path === '/api/workflows/uptime') {
+      if (rolledUptime !== null && dagId === 'daily_sync' && get('lookback_hours')) {
+        return reply(route, { workflows: { daily_sync: rolledUptime ? [nextSlot] : [firstSlot, nextSlot] } });
+      }
       const start = get('start_at') ? new Date(get('start_at')).getTime() : Date.now() - 86400000;
       const slots = Array.from({ length: 48 }, (_, i) => ({ start_at: new Date(start + i * 1800000).toISOString(), end_at: new Date(start + (i + 1) * 1800000).toISOString(), state: 'idle', run_count: 0, failed_run_count: 0 }));
       return reply(route, { workflows: Object.fromEntries(ids.map(id => [id, slots])) });
+    }
+    if (path === '/api/workflows/uptime/failures' && dagId === 'daily_sync') {
+      const items = [1, 2].map(try_number => ({
+        run_id: runId, task_id: 'example', try_number, ended_at: '2026-11-16T23:15:00Z',
+        error_message: `失败 ${try_number}`, run_state: 'success',
+      }));
+      return reply(route, { items, total: items.length, failed_run_count: 1, next_offset: null });
     }
     if (path === '/api/workflows/detail' && definition) return reply(route, definition);
     if (path === '/api/workflows/source' && definition) return reply(route, { content: `DAG(${JSON.stringify(dagId)})`, parsed_matches: true, run_matches: true, path: 'fixture.py' });
@@ -77,7 +98,8 @@ async original => {
     }
     if (path === '/api/history/run') return reply(route, {
       dag_id: dagId, run_id: get('run_id'), state: 'success', tasks: { example: 'success' },
-      task_details: { example: { state: 'success', try_number: 1 } }, definition_matches: true,
+      task_details: { example: { state: 'success', try_number: 1 } },
+      definition_hash: historicalHash, definition_matches: true,
     });
     if (path === '/api/history/task-log') return reply(route, { content: '原始任务日志', attempts: [{ try_number: 1 }, { try_number: 2 }] });
     if (path === '/api/history/runs') return reply(route, { runs: [{ dag_id: dagId || '.', run_id: runId, state: 'success', run_type: 'manual', project_kind: 'project', project: 'review' }], issues: [], loading: false });
@@ -306,6 +328,39 @@ async original => {
       }), `${width}px 操作按钮超出弹窗或视口`);
       await page.keyboard.press('Escape');
     }
+
+    const definition = definitions.daily_sync;
+    definition.tasks[0].upstream = ['原定义上游'];
+    await page.goto(`${origin}/#/history/run?dag_id=daily_sync&run_id=${encodeURIComponent(runId)}`);
+    await main.locator('.task-info').getByText('原定义上游', { exact: true }).waitFor();
+    definition.definition_hash = 'changed-definition';
+    definition.tasks[0].upstream = ['新定义上游'];
+    await main.getByText(/工作流定义已变化/).waitFor();
+    check(await main.locator('.task-info').getByText(/原定义上游|新定义上游/).count() === 0, '异步轮询混用了历史状态与新定义');
+    await main.getByText('原始任务日志', { exact: true }).waitFor();
+    result.historyVersions = '定义轮询先到时隐藏未核验的依赖，保留日志';
+
+    rolledUptime = false;
+    await go('daily_sync');
+    const chart = main.locator('.uptime-detail-chart');
+    const redSlot = chart.locator('button.uptime-failed');
+    await redSlot.click();
+    const panel = chart.locator('.uptime-failures');
+    await panel.locator('.uptime-failure-item').nth(1).click();
+    const fullLog = panel.getByRole('link', { name: '查看完整日志 →', exact: true });
+    check((await fullLog.getAttribute('href')).includes('attempt=2'), '没有选中第二次失败尝试');
+    await panel.evaluate(node => { window.reviewFailurePanel = node; });
+    rolledUptime = true;
+    await redSlot.waitFor({ state: 'detached' });
+    check(await panel.evaluate(node => window.reviewFailurePanel === node), '红格移出窗口后卸载了失败面板');
+    check((await fullLog.getAttribute('href')).includes('attempt=2'), '红格移出窗口后丢失已选尝试');
+    check(calls.filter(call => call.path === '/api/workflows/uptime/failures').every(call =>
+      call.start === firstSlot.start_at && call.end === firstSlot.end_at), '轮询改变了打开时的失败时段');
+    await panel.getByRole('button', { name: '收起失败详情', exact: true }).click();
+    await panel.waitFor({ state: 'detached' });
+    result.failureOutsideWindow = '保留原时段和第二次尝试直到收起';
+    rolledUptime = null;
+
     role = 'viewer';
     await page.goto(`${origin}/#/dags/..`);
     await page.reload();

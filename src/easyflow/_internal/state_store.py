@@ -7,7 +7,7 @@ import os
 import sqlite3
 import time
 import traceback
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone, tzinfo
@@ -340,6 +340,7 @@ class SQLiteStateStore:
         only_once: bool = False,
         scheduler_fence: SchedulerFence | None = None,
         reprocessing_behavior: str | None = None,
+        check_definition: Callable[[], None] | None = None,
     ) -> None:
         now = _utc_now()
         with self._connect() as connection:
@@ -403,6 +404,8 @@ class SQLiteStateStore:
                     raise DagRunCapacityError(
                         f"backfill {backfill_id!r} 已达到 max_active_runs={max_active_runs}。"
                     )
+            if check_definition is not None:
+                check_definition()
             connection.execute(
                 """
                 INSERT INTO dag_definition(dag_id, definition_hash, file_path, parsed_at, max_active_runs)
@@ -616,16 +619,12 @@ class SQLiteStateStore:
             row = connection.execute(query, params).fetchone()
         return int(row[0])
 
-    def count_active_dag_runs(self, *, dag_id: str) -> int:
+    def count_active_dag_runs(self, *, dag_id: str, include_backfill: bool = True) -> int:
+        query = "SELECT COUNT(*) FROM dag_run WHERE dag_id = ? AND state IN ('queued', 'running')"
+        if not include_backfill:
+            query += " AND run_type != 'backfill'"
         with self._connect() as connection:
-            row = connection.execute(
-                """
-                SELECT COUNT(*)
-                FROM dag_run
-                WHERE dag_id = ? AND state IN (?, ?)
-                """,
-                (dag_id, DagRunState.QUEUED.value, DagRunState.RUNNING.value),
-            ).fetchone()
+            row = connection.execute(query, (dag_id,)).fetchone()
         return int(row[0])
 
     def list_active_dag_runs(self, dag_id: str) -> list[str]:
@@ -947,6 +946,17 @@ class SQLiteStateStore:
             ).fetchone()
         return datetime.fromisoformat(row[0]) if row and row[0] else None
 
+    def task_try_number(self, dag_id: str, run_id: str, task_id: str) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT try_number FROM task_instance "
+                "WHERE dag_id = ? AND run_id = ? AND task_id = ? AND map_index = -1",
+                (dag_id, run_id, task_id),
+            ).fetchone()
+        if row is None:
+            raise StateConflictError(f"TaskInstance 不存在: {dag_id}/{run_id}/{task_id}")
+        return row[0]
+
     def renew_task_lease(
         self,
         *,
@@ -1195,6 +1205,7 @@ class SQLiteStateStore:
         retry_factor: float = 1.0,
         max_retry_delay: timedelta | None = None,
         worker_exit: tuple[int, int] | None = None,
+        expected_try_number: int | None = None,
     ) -> TaskInstanceState | None:
         current = now or datetime.now(timezone.utc)
         if current.tzinfo is None:
@@ -1216,6 +1227,8 @@ class SQLiteStateStore:
                 )
             state, try_number, lease_expires_at, retry_base, worker_pid = row
             if state != TaskInstanceState.RUNNING.value:
+                return None
+            if expected_try_number is not None and try_number != expected_try_number:
                 return None
             if worker_exit is not None:
                 exited_pid, exitcode = worker_exit
@@ -1319,22 +1332,34 @@ class SQLiteStateStore:
         dag: Any,
         run_id: str,
         now: datetime | None = None,
-    ) -> dict[str, TaskInstanceState]:
-        recovered: dict[str, TaskInstanceState] = {}
-        for task in dag.tasks:
+    ) -> dict[str, RecoveredTask]:
+        current = now or datetime.now(UTC)
+        with self._connect() as connection:
+            expired = connection.execute(
+                "SELECT task_id, try_number, worker_pid FROM task_instance "
+                "WHERE dag_id = ? AND run_id = ? AND map_index = -1 AND state = 'running' "
+                "AND lease_expires_at <= ?",
+                (dag.dag_id, run_id, _iso(current)),
+            ).fetchall()
+        recovered = {}
+        for task_id, try_number, worker_pid in expired:
+            if task_id not in dag.task_dict:
+                continue
+            task = dag.get_task(task_id)
             delay, factor, maximum = task_retry_settings(dag, task)
             state = self.recover_orphaned_task(
                 dag_id=dag.dag_id,
                 run_id=run_id,
-                task_id=task.task_id,
+                task_id=task_id,
                 retries=_task_retries(dag, task),
-                now=now,
+                now=current,
                 retry_delay=delay,
                 retry_factor=factor,
                 max_retry_delay=maximum,
+                expected_try_number=try_number,
             )
             if state is not None:
-                recovered[task.task_id] = state
+                recovered[task_id] = RecoveredTask(try_number, worker_pid, state)
         return recovered
 
     def mark_task_terminal(
@@ -1369,15 +1394,19 @@ class SQLiteStateStore:
         *,
         message: str,
         log_path: str | None,
+        previous_try_number: int,
     ) -> None:
         now = _utc_now()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT state, try_number FROM task_instance WHERE dag_id = ? AND run_id = ? AND task_id = ? AND map_index = -1",
+                "SELECT t.state, t.try_number FROM task_instance t "
+                "JOIN dag_run r USING (dag_id, run_id) "
+                "WHERE t.dag_id = ? AND t.run_id = ? AND t.task_id = ? AND t.map_index = -1 "
+                "AND r.state IN ('queued', 'running')",
                 (dag_id, run_id, task_id),
             ).fetchone()
-            if row is None or row[0] not in (
+            if row is None or row[1] != previous_try_number or row[0] not in (
                 None,
                 "queued",
                 "scheduled",
@@ -1609,6 +1638,7 @@ class SQLiteStateStore:
         task_ids: list[str] | None = None,
         actor: str = "cli",
         reason: str = "",
+        check_definition: Callable[[], object] | None = None,
     ) -> "ClearTaskResult":
         # 执行器在读取任务状态并派发时持有同一把锁，避免依据旧状态派发。
         with self.run_lock(dag_id, run_id) as acquired, self._connect() as connection:
@@ -1624,6 +1654,8 @@ class SQLiteStateStore:
             to_clear = plan.to_clear
             if plan.blocked or not to_clear:
                 return plan
+            if check_definition is not None:
+                check_definition()
             now = _utc_now()
             payload = {"actor": actor, "reason": reason, "task_ids": to_clear}
             placeholders = ",".join("?" for _ in to_clear)
@@ -1702,6 +1734,11 @@ class SQLiteStateStore:
         dry_run: bool,
         run_lock_busy: bool = False,
     ) -> ClearTaskResult:
+        run = connection.execute(
+            "SELECT state FROM dag_run WHERE dag_id = ? AND run_id = ?", (dag_id, run_id)
+        ).fetchone()
+        if run is None:
+            raise ValueError(f"DagRun 不存在: {dag_id}/{run_id}")
         if task_ids == []:
             return ClearTaskResult([], [], dry_run)
         query = """
@@ -1737,8 +1774,9 @@ class SQLiteStateStore:
         if to_clear and not blocked:
             dispatched = connection.execute(
                 "SELECT task_id FROM task_instance WHERE dag_id = ? AND run_id = ? "
-                "AND state IN ('queued', 'running') ORDER BY task_id LIMIT 1",
-                (dag_id, run_id),
+                "AND (state = 'running' OR (state = 'queued' AND ? IN ('queued', 'running'))) "
+                "ORDER BY task_id LIMIT 1",
+                (dag_id, run_id, run[0]),
             ).fetchone()
             if dispatched:
                 reason = (
@@ -1871,6 +1909,13 @@ class PreviousTaskRecord:
     exists: bool
     run_id: str | None
     state: TaskInstanceState | None
+
+
+@dataclass(frozen=True)
+class RecoveredTask:
+    try_number: int
+    worker_pid: int | None
+    state: TaskInstanceState
 
 
 @dataclass(frozen=True)

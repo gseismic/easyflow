@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from easyflow._internal.cron import cron_next_after, cron_previous_before
-from easyflow._internal.dag_parser import load_dag_from_file
+from easyflow._internal.dag_parser import inspect_dags_from_file, load_dag_from_file
 from easyflow._internal.persistent_runner import PersistentDagRunner
 from easyflow._internal.scheduler import create_backfill, run_scheduler_once
 from easyflow._internal.schedules import backfill_intervals, scheduler_intervals
@@ -15,6 +15,46 @@ from easyflow._internal.state_store import SQLiteStateStore
 from easyflow.sdk import DAG
 
 UTC = timezone.utc
+
+
+def test_named_timezone_snapshot_preserves_local_cron_hour_across_dst(tmp_path):
+    path = tmp_path / "zones.py"
+    path.write_text(
+        """from datetime import datetime, tzinfo
+from zoneinfo import ZoneInfo
+from easyflow.sdk import DAG
+
+class NamedZone(tzinfo):
+    zone = 'America/New_York'
+    _rules = ZoneInfo(zone)
+
+    def utcoffset(self, when):
+        return self._rules.utcoffset(when)
+
+    def dst(self, when):
+        return self._rules.dst(when)
+
+    def tzname(self, when):
+        return self._rules.tzname(when)
+
+class UnnamedZone(NamedZone):
+    zone = None
+
+named = DAG('named', schedule='0 9 * * *', start_date=datetime(2026, 1, 1, tzinfo=NamedZone()))
+unknown = DAG('unknown', start_date=datetime(2026, 1, 1, tzinfo=UnnamedZone()))
+""",
+        encoding="utf-8",
+    )
+    discovery = inspect_dags_from_file(path)
+    assert [source.dag_id for source in discovery.sources] == ["named"]
+    assert discovery.issues[0].dag_id == "unknown" and "动态时区" in discovery.issues[0].message
+    dag = discovery.sources[0].dag
+    assert dag.start_date.tzinfo == ZoneInfo("America/New_York")
+    for month, utc_hour in [(1, 14), (7, 13)]:
+        now = datetime(2026, month, 5, 17, tzinfo=UTC)
+        assert [i.logical_date.astimezone(UTC) for i in scheduler_intervals(dag, now)] == [
+            now.replace(hour=utc_hour)
+        ]
 
 
 def test_timedelta_trigger_uses_current_time_and_respects_run_history():

@@ -13,7 +13,9 @@ import pytest
 
 from easyflow._internal import scheduler
 from easyflow._internal.dag_parser import (
+    AsyncDagDiscovery,
     DagSource,
+    DagSourceChanged,
     load_dag_from_file,
     load_dag_snapshot,
 )
@@ -21,9 +23,114 @@ from easyflow._internal.persistent_runner import PersistentDagRunner
 from easyflow._internal.schedules import interval_for_logical_date
 from easyflow._internal.state_store import SQLiteStateStore
 from easyflow.cli import main
+from easyflow.providers.standard.operators.empty import EmptyOperator
 from easyflow.sdk import DAG, task
 
 NOW = datetime(2026, 7, 1, tzinfo=UTC)
+
+
+def test_scheduled_creation_rejects_stale_source_without_consuming_date(tmp_path, monkeypatch):
+    helper = tmp_path / "review_config.py"
+    helper.write_text("VALUE = 'v1'\n", encoding="utf-8")
+    source = _source(
+        tmp_path / "scheduled.py", "fresh",
+        """from review_config import VALUE
+from easyflow.sdk import DAG, task
+with DAG('fresh', schedule='@daily') as dag:
+    @task
+    def work():
+        return VALUE
+    work()
+""",
+    )
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    runner = PersistentDagRunner(store, log_root=tmp_path / "logs")
+    interval = interval_for_logical_date(source.dag.schedule, NOW)
+    discovery = AsyncDagDiscovery(tmp_path, file_path=source.file_path)
+    try:
+        before = discovery.scan(wait_seconds=2).sources[0]
+        create_run = store.create_dag_run
+
+        def edit_at_write(**kwargs):
+            helper.write_text("VALUE = 'v2'\n", encoding="utf-8")
+            return create_run(**kwargs)
+
+        with monkeypatch.context() as context:
+            context.setattr(store, "create_dag_run", edit_at_write)
+            with pytest.raises(DagSourceChanged, match="本地依赖"):
+                runner.create_scheduled_run(before.dag, file_path=before.file_path, interval=interval)
+        assert store.latest_automated_logical_date("fresh") is None
+        with (
+            scheduler.scheduler_session(store=store, owner=None, lease_seconds=10) as heartbeat,
+            scheduler.SchedulerCoordinator(store, heartbeat, tmp_path / "logs", "local", 1) as coordinator,
+        ):
+            current = discovery.scan(wait_seconds=2)
+            assert not current.pending
+            coordinator.submit(current.sources, NOW)
+            summaries, issues = coordinator.collect(wait=True)
+    finally:
+        discovery.close()
+    assert not issues and len(summaries) == 1
+    assert summaries[0].state.value == "success"
+    assert store.pull_xcom("fresh", summaries[0].run_id, "work", "return_value") == "v2"
+    assert store.latest_automated_logical_date("fresh") == NOW
+
+
+@pytest.mark.parametrize("active_type", ["manual", "backfill"])
+def test_saturated_scheduled_capacity_skips_catchup_expansion(tmp_path, monkeypatch, active_type):
+    with DAG("catchup", schedule="* * * * *", start_date=NOW - timedelta(days=5), catchup=True) as dag:
+        EmptyOperator(task_id="work")
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    runner = PersistentDagRunner(store, log_root=tmp_path / "logs")
+    interval = interval_for_logical_date(dag.schedule, NOW + timedelta(days=1))
+    if active_type == "manual":
+        active = runner.create_manual_run(dag, file_path=None, logical_date=interval.logical_date)
+    else:
+        active = runner.create_backfill_run(dag, file_path=None, interval=interval, backfill_id="backfill")
+    path = tmp_path / "catchup.py"
+    path.touch()
+    expanded = []
+    def one_interval(dag, now, **kwargs):
+        expanded.append(dag.dag_id)
+        return [interval_for_logical_date(dag.schedule, now)]
+    monkeypatch.setattr(scheduler, "scheduler_intervals", one_interval)
+    run_ids, _ = scheduler._scan_scheduled_runs(DagSource(dag.dag_id, path, dag), runner, NOW)
+    assert run_ids[0] == active
+    if active_type == "manual":
+        assert expanded == [] and run_ids == [active]
+    else:
+        assert expanded == [dag.dag_id] and len(run_ids) == 2
+        assert store.latest_automated_logical_date(dag.dag_id) == NOW
+
+
+def test_orphan_recovery_writes_only_for_expired_candidates(tmp_path, monkeypatch):
+    with DAG("leases") as dag:
+        for i in range(500):
+            EmptyOperator(task_id=f"task_{i}", retries=1)
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    runner = PersistentDagRunner(store, log_root=tmp_path / "logs")
+    run_id = runner.create_manual_run(dag, file_path=None, logical_date=NOW)
+    store.configure_parallelism(2)
+    store.start_task_try(dag.dag_id, run_id, "task_0", now=NOW, lease_seconds=5)
+    store.start_task_try(dag.dag_id, run_id, "task_1", now=NOW, lease_seconds=20)
+    statements = []
+    original_connect = store._connect
+    @contextmanager
+    def traced_connect():
+        with original_connect() as connection:
+            connection.set_trace_callback(statements.append)
+            yield connection
+    monkeypatch.setattr(store, "_connect", traced_connect)
+    assert not store.recover_orphaned_tasks_for_run(dag=dag, run_id=run_id, now=NOW)
+    assert statements.count("BEGIN IMMEDIATE") == 0
+    recovered = store.recover_orphaned_tasks_for_run(
+        dag=dag, run_id=run_id, now=NOW + timedelta(seconds=5)
+    )
+    assert statements.count("BEGIN IMMEDIATE") == 1
+    assert list(recovered) == ["task_0"]
+    assert recovered["task_0"].try_number == 1
+    assert recovered["task_0"].state.value == "up_for_retry"
+    assert store.get_task_state(dag.dag_id, run_id, "task_1").value == "running"
 
 
 def _source(path, dag_id, source):

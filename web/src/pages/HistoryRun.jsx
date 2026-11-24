@@ -29,10 +29,12 @@ export default function HistoryRun({ dagId, runId, requestedTaskId, requestedAtt
       setAttempt(target === requestedTaskId ? requestedAttempt || "" : "");
     }
   }, [taskId, run.data, requestedTaskId, requestedAttempt]);
-  const matchingTasks =
-    run.data?.definition_matches === true && !dag.error ? dag.data?.tasks : null;
+  const differentDefinition = Boolean(dag.data?.definition_hash && run.data?.definition_hash &&
+    dag.data.definition_hash !== run.data.definition_hash);
+  const matchesDefinition = run.data?.definition_matches === true && !dag.error &&
+    Boolean(run.data.definition_hash) && run.data.definition_hash === dag.data?.definition_hash;
   const selectedTask =
-    matchingTasks?.find((item) => item.task_id === taskId) ||
+    (matchesDefinition && dag.data.tasks?.find((item) => item.task_id === taskId)) ||
     (taskId ? { task_id: taskId } : null);
   return (
     <main className="page detail-page">
@@ -74,13 +76,13 @@ export default function HistoryRun({ dagId, runId, requestedTaskId, requestedAtt
             </div>
             <RunMetadata run={run.data} />
           </section>
-          {(run.data.definition_matches !== true || dag.error) && (
+          {!matchesDefinition && (
             <div className="notice warning">
               {run.data.definition_pending
                 ? "当前 DAG 定义仍在解析，匹配状态稍后会自动更新。"
                 : dag.error && run.data.definition_matches === true
                   ? "当前工作流信息加载失败；下面显示已保存的任务状态和日志。"
-                  : run.data.definition_matches === false
+                  : run.data.definition_matches === false || differentDefinition
                     ? "工作流定义已变化；历史上下游无法确认，下面显示已保存的任务状态和日志。"
                     : "无法确认历史工作流定义；下面显示已保存的任务状态和日志。"}
             </div>

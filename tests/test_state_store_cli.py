@@ -2,8 +2,38 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
+from easyflow import cli
+from easyflow._internal.scheduler import ScheduledRunSummary
 from easyflow._internal.state_store import SQLiteStateStore, path_from_database_url
 from easyflow.cli import main
+from easyflow.sdk.states import DagRunState
+
+
+@pytest.mark.parametrize("option", ["--dry-run", "--yes"])
+def test_cli_clear_rejects_nonexistent_run_without_task_id(tmp_path, capsys, option):
+    status = main([
+        "tasks", "clear", "demo", "--run-id", "missing", option,
+        "--database-url", str(tmp_path / "state.db"),
+    ])
+    captured = capsys.readouterr()
+    assert status == 1 and "DagRun 不存在" in captured.err
+    assert "EXECUTED" not in captured.out
+
+
+@pytest.mark.parametrize("other_dag_failed", [False, True])
+def test_finite_scheduler_exit_uses_last_state_per_run(tmp_path, monkeypatch, capsys, other_dag_failed):
+    summaries = [
+        ScheduledRunSummary("shared", DagRunState.RUNNING, "a"),
+        ScheduledRunSummary("shared", DagRunState.SUCCESS, "a"),
+    ]
+    if other_dag_failed:
+        summaries.insert(1, ScheduledRunSummary("shared", DagRunState.FAILED, "b"))
+    monkeypatch.setattr(cli, "_run_scheduler_loop_for_sources", lambda args: (summaries, []))
+    code = main(["scheduler", "--max-loops", "2", "--database-url", str(tmp_path / "state.db")])
+    assert code == int(other_dag_failed)
+    assert capsys.readouterr().out.splitlines()[-1] == "a shared success"
 
 
 def test_sqlite_state_store_init_creates_core_tables(tmp_path) -> None:

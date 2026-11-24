@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from easyflow._internal.dag_parser import DagSourceChanged
 from easyflow.sdk.exceptions import StateConflictError
 from easyflow.web.auth import AuthStore, COOKIE_NAME, LoginThrottle, csrf_token
 from easyflow.web.routers import auth, catalog, dags, history, runs
@@ -87,6 +88,10 @@ def create_app(*, dags_folder: str, database_url: str, log_root: str) -> FastAPI
         return JSONResponse(
             {"detail": str(exc)}, status_code=503, headers={"Retry-After": "1"}
         )
+
+    @app.exception_handler(DagSourceChanged)
+    async def definition_changed(request: Request, exc: DagSourceChanged):
+        return JSONResponse({"detail": str(exc)}, status_code=409)
 
     @app.exception_handler(ValueError)
     @app.exception_handler(StateConflictError)

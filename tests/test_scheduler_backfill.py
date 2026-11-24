@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+import threading
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -10,6 +11,41 @@ from easyflow._internal.persistent_runner import PersistentDagRunner
 from easyflow._internal.scheduler import create_backfill, run_scheduler_once
 from easyflow._internal.state_store import SQLiteStateStore
 from easyflow.cli import main
+
+
+def test_concurrent_backfill_rechecks_depends_on_past_after_batch(tmp_path, monkeypatch):
+    path = tmp_path / "backfill.py"
+    path.write_text(
+        """from easyflow.sdk import DAG, task
+with DAG('past', schedule='@daily') as dag:
+    @task(depends_on_past=True)
+    def work():
+        return '完成'
+    work()
+""",
+        encoding="utf-8",
+    )
+    second_blocked = threading.Event()
+    run_existing = PersistentDagRunner.run_existing
+
+    def wait_for_blocked_successor(runner, dag, *, run_id, **kwargs):
+        if "2026-07-01" in run_id:
+            assert second_blocked.wait(10), "第二天应先遇到尚未完成的前序运行"
+        result = run_existing(runner, dag, run_id=run_id, **kwargs)
+        if "2026-07-02" in run_id and result.state.value == "running":
+            second_blocked.set()
+        return result
+
+    monkeypatch.setattr(PersistentDagRunner, "run_existing", wait_for_blocked_successor)
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    summary = create_backfill(
+        dag_id="past", file_path=path, store=store,
+        start_date=date(2026, 7, 1), end_date=date(2026, 7, 3),
+        max_active_runs=2, log_root=tmp_path / "logs",
+    )
+    assert second_blocked.is_set()
+    assert summary.complete and [item.state.value for item in summary.runs] == ["success"] * 3
+    assert store.count_dag_runs(dag_id="past", run_type="backfill") == 3
 
 
 def test_scheduler_once_creates_latest_daily_run_and_deduplicates(tmp_path) -> None:

@@ -16,7 +16,8 @@ from easyflow._internal.dag_parser import (
     DagSource,
     discover_dag_sources,
     inspect_dags_from_file,
-    load_dag_from_file,
+    open_dag_from_file,
+    refresh_dag_source,
 )
 from easyflow._internal.persistent_runner import (
     ExecutorName,
@@ -214,6 +215,7 @@ def dags_trigger(
         conf = json.loads(conf_json)
         if not isinstance(conf, dict):
             raise ValueError("--conf-json 必须是 JSON 对象。")
+        source = refresh_dag_source(source)
         chosen_parallelism = _configure_parallelism(store, parallelism)
         runner = PersistentDagRunner(store, log_root=log_root)
         created = runner.create_manual_run(
@@ -263,8 +265,8 @@ def dags_test(
         conf = json.loads(conf_json)
         if not isinstance(conf, dict):
             raise ValueError("--conf-json 必须是 JSON 对象。")
-        dag = load_dag_from_file(source.file_path, dag_id)
-        result = dag.test(logical_date=_parse_logical_date(logical_date), run_conf=conf)
+        with open_dag_from_file(source.file_path, dag_id) as dag:
+            result = dag.test(logical_date=_parse_logical_date(logical_date), run_conf=conf)
     except ValueError as exc:
         _error(str(exc))
     typer.echo(f"{dag_id} {result.run_id} {'success' if result.success else 'failed'}")
@@ -309,9 +311,12 @@ def tasks_clear(
 ) -> None:
     """预览或清理任务实例。"""
     store = SQLiteStateStore(database_url)
-    preview = store.preview_clear_task_instances(
-        dag_id=dag_id, run_id=run_id, task_ids=task_id
-    )
+    try:
+        preview = store.preview_clear_task_instances(
+            dag_id=dag_id, run_id=run_id, task_ids=task_id
+        )
+    except ValueError as exc:
+        _error(str(exc))
     _print_clear_result(preview)
     if dry_run:
         if preview.blocked:
@@ -411,7 +416,11 @@ def scheduler(
         typer.echo(
             f"{summary.dag_id or dag_id or '<unknown>'} {summary.run_id} {summary.state.value}"
         )
-    if issues or any(summary.state.value != "success" for summary in summaries):
+    final_states = {
+        (summary.dag_id or dag_id, summary.run_id): summary.state.value
+        for summary in summaries
+    }
+    if issues or any(state != "success" for state in final_states.values()):
         raise typer.Exit(1)
 
 

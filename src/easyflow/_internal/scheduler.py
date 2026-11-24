@@ -13,7 +13,13 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from easyflow._internal.dag_parser import DagSource, load_dag_snapshot
+from easyflow._internal.dag_parser import (
+    DagSource,
+    DagSourceChanged,
+    dag_source_is_current,
+    load_dag_snapshot,
+    refresh_dag_source,
+)
 from easyflow._internal.persistent_runner import (
     PersistentDagRunner,
     PersistentRunResult,
@@ -363,6 +369,11 @@ def _scan_scheduled_runs(
     if not runner.should_continue() or store.is_dag_paused(dag.dag_id):
         return [], False
     run_ids = store.list_active_dag_runs(dag.dag_id)
+    limit = dag.max_active_runs or 1
+    if len(run_ids) >= limit and store.count_active_dag_runs(
+        dag_id=dag.dag_id, include_backfill=False
+    ) >= limit:
+        return run_ids, False
     intervals = scheduler_intervals(
         dag,
         now,
@@ -398,6 +409,8 @@ def _scan_scheduled_runs(
     else:
         scanned_all = True
     if last_skipped is not None and runner.should_continue():
+        if not dag_source_is_current(dag, source.file_path):
+            raise DagSourceChanged("推进调度游标前 DAG 源码或本地依赖已改变，请重新加载。")
         store.advance_schedule_cursor(
             dag.dag_id, last_skipped, scheduler_fence=runner.scheduler_fence
         )
@@ -412,6 +425,7 @@ def _run_scheduler_source_once(
     executor: str,
     parallelism: int,
 ) -> list[ScheduledRunSummary]:
+    source = refresh_dag_source(source)
     dag = source.dag
     summaries: list[ScheduledRunSummary] = []
     while runner.should_continue():
@@ -570,9 +584,18 @@ def create_backfill(
                 )
                 batch.append((interval, future))
                 current = next(intervals, None)
+            # 先等同批所有前序运行取得结果，再按日期重查被依赖阻挡的运行。
+            batch_results = [(interval, future.result()) for interval, future in batch]
             pending = []
-            for interval, future in batch:
-                result = future.result()
+            for interval, result in batch_results:
+                if result.state in {DagRunState.QUEUED, DagRunState.RUNNING}:
+                    result = runner.run_existing(
+                        dag,
+                        run_id=result.run_id,
+                        file_path=file_path,
+                        executor=executor,
+                        parallelism=parallelism,
+                    )
                 summaries.append(
                     ScheduledRunSummary(
                         dag_id=dag.dag_id, run_id=result.run_id, state=result.state

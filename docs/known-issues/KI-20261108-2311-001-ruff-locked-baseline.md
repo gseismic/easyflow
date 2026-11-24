@@ -97,3 +97,9 @@
 - 依据版本：`WORKTREE`，基准完整提交 `e4ca538ddcf97510846dcfdfbd4a839627429c65`；本次相关 Python 修改为 `src/easyflow/web/app.py`、`src/easyflow/web/routers/dags.py`、新增 `tests/test_web_workflow_addressing.py`，尚未提交。
 - 默认 Ruff 检查 `app.py` 得到既有导入排序 `I001` 一项；将同一基准文件导出到临时目录、使用同一 Ruff 检查，诊断规则、位置和信息相同，新增 0 项。路由和新测试文件的默认 Ruff 通过，三个修改文件的 `--select E4,E7,E9,F` 通过。未执行全仓默认 Ruff，不将这一项描述为全仓诊断数量或默认全仓检查通过。
 - 关联结果：`docs/plans/PLAN-20261117-003-model-unknown-frontend-review-loop-OUTCOME.md`；298 项后端、38 项前端、最终构建及隔离浏览器验收通过。本次没有提交或推送。
+
+## 2026-11-24 18:59 Asia/Shanghai 全量 Review 修复后的基线复核
+
+- 更新者为 Codex，已知模型系列为 GPT-6，环境未提供精确模型 ID。状态保持未解决。
+- 以 `c900362e04944fd8c0a483c8958f1899aae795d1` 和本次 `WORKTREE` 为对照。用同一 Ruff 0.17.4 扫描 `src tests examples`，按相对路径、规则和消息计数，两者各 192 项，新增及减少均为 0。
+- 显式选择 `E4,E7,E9,F` 的检查通过。相关代码路径和其他验证结果见[全量 Review 修复与复审结果](../plans/PLAN-20261124-001-model-unknown-review-fix-loop-OUTCOME.md)。

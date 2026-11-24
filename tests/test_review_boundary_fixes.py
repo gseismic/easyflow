@@ -73,7 +73,7 @@ def test_local_dependencies_ignore_stale_pyc_and_refresh_cached_packages(
     assert store.pull_xcom("dependencies", run_id, "work", "return_value") == "NEW"
 
 
-def test_dependency_digest_records_loaded_bytes_even_if_file_changes_during_import(
+def test_dependency_digest_rejects_creation_when_file_changes_during_import(
     tmp_path, monkeypatch
 ):
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -102,10 +102,13 @@ def test_dependency_digest_records_loaded_bytes_even_if_file_changes_during_impo
     assert helper.read_text() == replacement
     store = SQLiteStateStore(f"sqlite:///{tmp_path / 'state.db'}")
     runner = PersistentDagRunner(store, log_root=tmp_path / "logs")
-    run_id = runner.create_manual_run(dag, file_path=path, logical_date=NOW)
-    result = runner.run_existing(dag, run_id=run_id, file_path=path)
-    assert result.state.value == "failed"
-    assert result.task_states["work"] is None
+    with pytest.raises(ValueError, match="本地依赖已改变"):
+        runner.create_manual_run(dag, file_path=path, logical_date=NOW)
+    assert store.count_dag_runs(dag_id="changed") == 0
+    refreshed = load_dag_snapshot(path, "changed")
+    run_id = runner.create_manual_run(refreshed, file_path=path, logical_date=NOW)
+    assert runner.run_existing(refreshed, run_id=run_id, file_path=path).state.value == "success"
+    assert store.pull_xcom("changed", run_id, "work", "return_value") == "NEW"
 
 
 def test_resuming_local_run_counts_existing_lease_and_continues_after_completion(

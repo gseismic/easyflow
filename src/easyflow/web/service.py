@@ -16,6 +16,8 @@ from easyflow._internal.dag_parser import (
     AsyncDagDiscovery,
     DagDiscoveryResult,
     DagSource,
+    DagSourceChanged,
+    dag_source_is_current,
     definition_hash_for_dag,
 )
 from easyflow._internal.persistent_runner import PersistentDagRunner
@@ -26,7 +28,7 @@ from easyflow._internal.schedules import (
     next_logical_date,
     scheduler_intervals,
 )
-from easyflow._internal.state_store import SQLiteStateStore
+from easyflow._internal.state_store import DagRunRecord, SQLiteStateStore
 from easyflow.web.catalog import (
     matches_project,
     search_terms,
@@ -162,6 +164,22 @@ def _parse_history_cursor(cursor: str) -> tuple[str, str, str]:
 
 class DagDiscoveryPending(RuntimeError):
     pass
+
+
+def _parsed_definition_hash(source: DagSource) -> str:
+    return definition_hash_for_dag(
+        source.dag,
+        source.file_path,
+        source_sha256=getattr(source.dag, "_easyflow_source_sha256", None),
+    )
+
+
+def _definition_matches(source: DagSource, expected: str | None) -> bool:
+    return (
+        expected is not None
+        and expected == _parsed_definition_hash(source)
+        and dag_source_is_current(source.dag, source.file_path)
+    )
 
 
 class WebService:
@@ -708,6 +726,7 @@ class WebService:
     def detail(self, dag_id: str) -> dict:
         source = self.source(dag_id)
         result = self.dag_info(source)
+        result["definition_hash"] = _parsed_definition_hash(source)
         result["tasks"] = [
             {
                 "task_id": task.task_id,
@@ -759,19 +778,26 @@ class WebService:
         result["definition_matches"] = None
         if result["definition_hash"]:
             try:
-                source = self.source(dag_id)
-                current_bytes = source.file_path.read_bytes()
-                if hashlib.sha256(current_bytes).hexdigest() == getattr(
-                    source.dag, "_easyflow_source_sha256", None
-                ):
-                    result["definition_matches"] = result[
-                        "definition_hash"
-                    ] == definition_hash_for_dag(source.dag, source.file_path)
+                result["definition_matches"] = _definition_matches(
+                    self.source(dag_id), result["definition_hash"]
+                )
             except DagDiscoveryPending:
                 result["definition_pending"] = True
             except (LookupError, OSError, ValueError):
                 pass
         return result
+
+    def check_clear_definition(
+        self, record: DagRunRecord, *, source: DagSource | None = None
+    ) -> DagSource:
+        message = "当前 DAG 定义无法与该运行确认匹配，不能清理后重跑。"
+        try:
+            source = source or self.source(record.dag_id)
+        except (LookupError, OSError, ValueError) as exc:
+            raise DagSourceChanged(message) from exc
+        if not _definition_matches(source, record.definition_hash):
+            raise DagSourceChanged(message)
+        return source
 
     def source_code(self, dag_id: str, run_id: str | None) -> dict:
         source = self.source(dag_id)
@@ -792,9 +818,7 @@ class WebService:
             if record is None:
                 raise LookupError("运行不存在。")
             if record.definition_hash and parsed_matches:
-                run_matches = record.definition_hash == definition_hash_for_dag(
-                    source.dag, path
-                )
+                run_matches = _definition_matches(source, record.definition_hash)
         return {
             "path": str(path.relative_to(self.dags_folder)),
             "content": raw.decode("utf-8", errors="replace"),
@@ -803,14 +827,22 @@ class WebService:
         }
 
     def trigger(self, dag_id: str, conf: dict) -> str:
-        source = self.source(dag_id)
         runner = PersistentDagRunner(self.store, log_root=self.log_root)
-        return runner.create_manual_run(
-            source.dag,
-            file_path=source.file_path,
-            logical_date=datetime.now(timezone.utc),
-            conf=conf,
-        )
+        logical_date = datetime.now(timezone.utc)
+
+        def enqueue() -> str:
+            source = self.source(dag_id)
+            return runner.create_manual_run(
+                source.dag,
+                file_path=source.file_path,
+                logical_date=logical_date,
+                conf=conf,
+            )
+
+        try:
+            return enqueue()
+        except DagSourceChanged:
+            return enqueue()
 
     def task_log(
         self, dag_id: str, run_id: str, task_id: str, attempt: int | None
@@ -834,9 +866,10 @@ class WebService:
                 with path.open("rb") as handle:
                     handle.seek(0, 2)
                     length = handle.tell()
-                    truncated = length > 1_000_000
-                    handle.seek(max(0, length - 1_000_000))
-                    content = handle.read().decode("utf-8", errors="replace")
+                    read_length = min(length, 1_000_000)
+                    truncated = read_length < length
+                    handle.seek(length - read_length)
+                    content = handle.read(read_length).decode("utf-8", errors="replace")
         return {
             "attempts": [
                 {"try_number": row["try_number"], "state": row["state"]} for row in rows
