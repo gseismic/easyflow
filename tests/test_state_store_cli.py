@@ -14,6 +14,22 @@ from easyflow.cli import main
 from easyflow.sdk.states import DagRunState
 
 
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        ([], ("scheduler", "dags")),
+        (["dags"], ("list", "trigger")),
+        (["tasks", "clear"], ("--run-id", "--dry-run")),
+    ],
+)
+def test_cli_help_shows_commands_and_options(capsys, args, expected):
+    assert main([*args, "--help"]) == 0
+    output = capsys.readouterr().out
+    assert "Usage: easyflow" in output
+    for entry in expected:
+        assert entry in output
+
+
 @pytest.mark.parametrize("option", ["--dry-run", "--yes"])
 def test_cli_clear_rejects_nonexistent_run_without_task_id(tmp_path, capsys, option):
     status = main([

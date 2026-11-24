@@ -265,7 +265,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9" },
-    { name = "typer", specifier = ">=0.15,<1" },
+    { name = "typer", specifier = ">=0.26,<1" },
     { name = "tzdata", specifier = ">=2024.1" },
     { name = "uvicorn", specifier = ">=0.30,<1" },
 ]

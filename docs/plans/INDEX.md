@@ -77,3 +77,5 @@
 - 2026-11-24 18:59 Asia/Shanghai，[全量 Review 修复与复审结果](PLAN-20261124-001-model-unknown-review-fix-loop-OUTCOME.md)，已完成（WORKTREE）。18 项均已复验，342 项后端、38 项前端、构建、浏览器与打包验证通过。
 - 2026-11-25 00:17 Asia/Shanghai，[全量 Review 修复与复审计划](PLAN-20261125-001-model-unknown-review-fix-loop.md)，进行中，覆盖 R01–R14。
 - 2026-11-25 01:03 Asia/Shanghai，[全量 Review 修复与复审结果](PLAN-20261125-001-model-unknown-review-fix-loop-OUTCOME.md)，已完成。14 项均已复验，376 项后端、39 项前端、构建、浏览器和打包验证通过。
+- 2026-11-25 01:24 Asia/Shanghai，[CLI 帮助兼容性修复计划](PLAN-20261125-002-model-unknown-cli-help-compatibility.md)，进行中。修复 Typer 依赖下限并验证 Miniconda 中的命令入口。
+- 2026-11-25 01:29 Asia/Shanghai，[CLI 帮助兼容性修复结果](PLAN-20261125-002-model-unknown-cli-help-compatibility-OUTCOME.md)，已完成（WORKTREE）。Miniconda 的 23 个帮助入口通过，379 项后端测试通过。
